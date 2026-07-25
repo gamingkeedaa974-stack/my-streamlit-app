@@ -1,0 +1,23 @@
+# 1. Get Fyers API credentials
+#    - Register at https://fyers.in
+#    - Create app, get app_id and secret
+#    - Generate access_token (valid for 1 day)
+
+# 2. Update BotConfig in api_server.py or via API
+curl -X POST http://localhost:8000/api/config \
+  -H "Content-Type: application/json" \
+  -d '{
+    "bot_config": {
+      "mode": "PAPER",
+      "fyers_app_id": "YOUR_APP_ID",
+      "fyers_access_token": "YOUR_ACCESS_TOKEN",
+      "symbols": ["NSE:NIFTY50-INDEX"]
+    }
+  }'
+
+# 3. Start bot from dashboard or API
+curl -X POST http://localhost:8000/api/control \
+  -H "Content-Type: application/json" \
+  -d '{"action": "START", "mode": "PAPER", "symbols": ["NSE:NIFTY50-INDEX"], "strategy_name": "orb"}'
+
+# 4. Monitor in real-time at http://localhost:5173

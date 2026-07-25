@@ -1,0 +1,1014 @@
+"""
+api_server.py
+FastAPI backend with WebSocket for real-time dashboard.
+Includes Simulated Paper Trading + Self-Improving Agent.
+"""
+
+from __future__ import annotations
+import asyncio
+import json
+from datetime import datetime, time, timedelta
+from typing import Optional, Dict, List
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+import uvicorn
+from backend.auth_manager import AuthManager
+from backend.user_session_manager import session_manager
+
+from backend.strategies.strategy import BaseStrategy, StrategyConfig, Signal, SignalAction, StrategyRegistry, MarketRegime
+from backend.risk_manager import RiskManager, RiskConfig, RiskState
+from backend.audit_logger import AuditLogger
+from backend.backtest_engine import BacktestEngine, DataGenerator, SyntheticOptionsChainProvider
+from backend.paper_broker import PaperBroker
+from backend.performance_monitor import PerformanceMonitor, PerformanceThresholds
+from backend.self_improvement_loop import SelfImprovementLoop, SelfImprovementConfig
+
+
+# ---------- API Models ----------
+class BotStatus(BaseModel):
+    running: bool
+    mode: str
+    uptime_seconds: float
+    symbols: List[str]
+    strategy: str
+    connected_to_broker: bool
+    last_heartbeat: Optional[datetime] = None
+    # ── NEW: Current market regime ──
+    market_regime: Optional[str] = None
+
+class PositionView(BaseModel):
+    symbol: str
+    underlying: str
+    option_type: str
+    strike: float
+    entry_price: float
+    current_price: float
+    quantity: int
+    unrealized_pnl: float
+    unrealized_pnl_pct: float
+    stop_loss: float
+    target: float
+    time_in_trade: str
+    # ── NEW: Greeks ──
+    delta: Optional[float] = None
+    gamma: Optional[float] = None
+    theta: Optional[float] = None
+    vega: Optional[float] = None
+
+class PortfolioSummary(BaseModel):
+    capital: float
+    daily_pnl: float
+    daily_pnl_pct: float
+    open_positions: int
+    margin_used_pct: float
+    available_margin: float
+    net_delta: float
+    # ── NEW: Additional Greeks ──
+    net_gamma: float = 0.0
+    net_theta: float = 0.0
+    net_vega: float = 0.0
+    circuit_breaker: bool
+    kill_switch: bool
+
+class StrategyControl(BaseModel):
+    action: str
+    mode: Optional[str] = "PAPER"
+    symbols: Optional[List[str]] = None
+    strategy_name: Optional[str] = "orb"
+
+class BacktestRequest(BaseModel):
+    strategy: str
+    symbol: str = "NIFTY50"
+    days: int = 30
+    mode: str = "synthetic"  # "synthetic", "real", "csv"
+    data_path: Optional[str] = None
+    data_source: Optional[str] = "auto"  # "auto", "nsepython", "fyers", "zerodha", "csv"
+    start_date: Optional[str] = None  # YYYY-MM-DD (for real data)
+    end_date: Optional[str] = None    # YYYY-MM-DD (for real data)
+    interval: Optional[str] = "5minute"  # "1minute", "5minute", "15minute", etc.
+
+class OptimizationRequest(BaseModel):
+    strategy: str
+    symbol: str = "NIFTY50"
+    mode: str = "adaptive"
+    iterations: int = 30
+    days: int = 60
+
+
+
+class StrategyCompareRequest(BaseModel):
+    symbol: str = "NIFTY50"
+    days: int = 30
+    mode: str = "synthetic"
+    data_path: Optional[str] = None
+    data_source: Optional[str] = "auto"
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    interval: Optional[str] = "5minute"
+
+class StrategyComparisonResult(BaseModel):
+    strategy: str
+    total_pnl_pct: float
+    win_rate: float
+    sharpe_ratio: float
+    max_drawdown: float
+    total_trades: int
+    profit_factor: float
+    avg_trade_pnl: float
+    score: float
+    ohlc_data: Optional[List[Dict]] = None
+    trades: Optional[List[Dict]] = None
+class SelfImprovementStatus(BaseModel):
+    enabled: bool
+    is_ab_testing: bool
+    current_params: Dict
+    candidate_params: Optional[Dict]
+    optimization_count_today: int
+    total_trades: int
+    win_rate: float
+    sharpe_ratio: float
+    max_drawdown: float
+    should_optimize: bool
+
+
+# ── NEW: NSE Data Feed stub — ready for PCR, max pain, OI buildup integration ──
+class NSEDataFeed:
+    """Stub for NSE-specific market data feed. Integrate with nsepython or broker API."""
+    
+    def __init__(self):
+        self.pcr_ratio: Optional[float] = None
+        self.max_pain: Optional[float] = None
+        self.oi_buildup: Dict[str, float] = {}
+        self.iv_percentile: Optional[float] = None
+    
+    async def fetch_data(self, symbol: str) -> Dict:
+        """Fetch PCR, max pain, OI buildup for symbol. Override with real implementation."""
+        # TODO: Integrate with nsepython or broker API
+        return {
+            "pcr_ratio": self.pcr_ratio,
+            "max_pain": self.max_pain,
+            "oi_buildup": self.oi_buildup,
+            "iv_percentile": self.iv_percentile,
+        }
+    
+    async def update_risk_manager(self, risk_manager):
+        """Feed NSE data into risk manager for PCR, max pain, OI buildup, IV percentile."""
+        data = await self.fetch_data("NIFTY50")
+        if risk_manager:
+            await risk_manager.update_market_data(
+                pcr=data.get("pcr_ratio"),
+                max_pain=data.get("max_pain"),
+                oi_buildup=data.get("oi_buildup"),
+                iv_percentile=data.get("iv_percentile"),
+            )
+
+
+# ---------- Connection Manager ----------
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    async def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+
+    async def broadcast(self, message: dict):
+        dead = []
+        for conn in self.active_connections:
+            try:
+                await conn.send_json(message)
+            except Exception:
+                dead.append(conn)
+        for d in dead:
+            if d in self.active_connections:
+                self.active_connections.remove(d)
+
+
+# ---------- Global State ----------
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+# Auth Manager Singleton
+auth_manager = AuthManager()
+class TradingServerState:
+    def __init__(self):
+        self.bot_running = False
+        self.bot_mode = "PAPER"
+        self.bot_task = None
+        self.manager = ConnectionManager()
+        self.start_time = None
+        self.current_strategy = None
+        self.strategy_instance = None
+        self.risk_manager = None
+        self.audit_logger = None
+        self.paper_broker = None
+        self.performance_monitor = None
+        self.self_improvement = None
+        self.nse_data_feed = NSEDataFeed()  # ── NEW: NSE data feed ──
+        self.synthetic_data = None
+        self.data_index = 0
+        self.positions = []
+        self.alerts = []
+        self.backtest_results = []
+        self.optimization_results = []
+        self.daily_pnl_history = []
+        self.self_improvement_enabled = False
+
+    def get_status(self):
+        uptime = 0
+        if self.start_time and self.bot_running:
+            uptime = (datetime.now() - self.start_time).total_seconds()
+        
+        # ── NEW: Get current regime from strategy ──
+        regime = None
+        if self.strategy_instance:
+            regime = getattr(self.strategy_instance, '_current_regime', None)
+            if regime:
+                regime = regime.value
+        
+        return BotStatus(
+            running=self.bot_running,
+            mode=self.bot_mode,
+            uptime_seconds=uptime,
+            symbols=["NSE:NIFTY50-INDEX"],
+            strategy=self.current_strategy or "none",
+            connected_to_broker=False,
+            last_heartbeat=datetime.now() if self.bot_running else None,
+            market_regime=regime,
+        )
+
+state = TradingServerState()
+
+
+# ---------- Paper Trading Engine ----------
+async def run_paper_trading():
+    """Main paper trading loop with self-improvement."""
+    if state.synthetic_data is None:
+        # ── NEW: Generate symbol-specific synthetic data ──
+        state.synthetic_data = DataGenerator.generate_synthetic_data(
+            days=1, 
+            symbol=state.current_strategy or "NIFTY50",
+            seed=None
+        )
+        state.data_index = 0
+
+    if state.strategy_instance is None:
+        strategy_cls = StrategyRegistry.get(state.current_strategy or "orb")
+        config_cls = StrategyRegistry.get_config_class(state.current_strategy or "orb")
+
+        # Use self-improvement params if available
+        params = {}
+        if state.self_improvement and state.self_improvement_enabled:
+            params = state.self_improvement.get_params_for_trading()
+            print(f"[TRADING] Using self-improved params: {params}")
+
+        config = config_cls(name=state.current_strategy or "orb", **params)
+        state.strategy_instance = strategy_cls(config)
+        # ── NEW: Reset strategy to clean state ──
+        state.strategy_instance.reset()
+
+    if state.paper_broker is None:
+        state.paper_broker = PaperBroker()
+
+    if state.risk_manager is None:
+        state.risk_manager = RiskManager(RiskConfig())
+
+    if state.performance_monitor is None:
+        state.performance_monitor = PerformanceMonitor(PerformanceThresholds())
+
+    # Start self-improvement loop if enabled
+    if state.self_improvement_enabled and state.self_improvement is None:
+        state.self_improvement = SelfImprovementLoop(
+            strategy_name=state.current_strategy or "orb",
+            config=SelfImprovementConfig(
+                check_interval_minutes=5,  # Check every 5 min for demo
+                min_trades_before_optimize=5,
+                optimization_iterations=20,
+                synthetic_days_for_opt=30,
+                validation_minutes=10,
+                max_param_changes_per_day=5,
+                improvement_threshold_pct=5.0
+            )
+        )
+        await state.self_improvement.start()
+
+    data = state.synthetic_data
+
+    while state.bot_running:
+        if state.data_index >= len(data):
+            # ── NEW: Regenerate with symbol-specific volatility ──
+            state.synthetic_data = DataGenerator.generate_synthetic_data(
+                days=1, 
+                symbol=state.current_strategy or "NIFTY50",
+                seed=None
+            )
+            state.data_index = 0
+            data = state.synthetic_data
+
+        row = data.iloc[state.data_index]
+        timestamp = data.index[state.data_index]
+
+        # Create bar
+        from backend.strategies.strategy import Bar as BarModel
+        bar_obj = BarModel(
+            symbol="NIFTY50",
+            timestamp=timestamp,
+            open=row["open"],
+            high=row["high"],
+            low=row["low"],
+            close=row["close"],
+            volume=int(row["volume"])
+        )
+        state.strategy_instance.ingest_bar(bar_obj)
+
+        # ── NEW: Update NSE market data feed periodically ──
+        if timestamp.minute % 15 == 0:  # Every 15 minutes
+            try:
+                if state.risk_manager:
+                    await state.nse_data_feed.update_risk_manager(state.risk_manager)
+            except Exception as e:
+                print(f"[NSE DATA] Feed error: {e}")
+
+        # Generate signal every 5 minutes
+        if timestamp.minute % 5 == 0:
+            try:
+                signal = await state.strategy_instance.generate_signal("NIFTY50", timestamp)
+
+                if signal.action != SignalAction.HOLD:
+                    # ── FIXED: Wire risk manager lot size through ──
+                    allowed, reason, qty = await state.risk_manager.can_trade(signal, timestamp)
+
+                    if allowed:
+                        # ── FIXED: Pass calculated qty to place_order ──
+                        pos = await state.paper_broker.place_order(signal, "NIFTY50", timestamp, qty=qty)
+
+                        if pos:
+                            alert_msg = f"Paper trade: {signal.action.value} {pos.symbol} @ ₹{pos.entry_price} (qty: {pos.quantity})"
+                            state.alerts.append({
+                                "level": "INFO",
+                                "message": alert_msg,
+                                "timestamp": timestamp.isoformat()
+                            })
+
+                            # Record in performance monitor
+                            if state.performance_monitor:
+                                state.performance_monitor.record_equity(
+                                    state.paper_broker.get_portfolio_summary()["capital"], 
+                                    timestamp
+                                )
+                    else:
+                        state.alerts.append({
+                            "level": "WARNING",
+                            "message": f"Trade blocked: {reason}",
+                            "timestamp": timestamp.isoformat()
+                        })
+
+            except Exception as e:
+                state.alerts.append({
+                    "level": "ERROR",
+                    "message": f"Strategy error: {str(e)}",
+                    "timestamp": datetime.now().isoformat()
+                })
+
+        # Update prices for all positions
+        await state.paper_broker.update_prices(row["close"], timestamp)
+
+        # â”€â”€ NEW: Risk manager MTM updates + exit signal checks â”€â”€
+        # Enables: trailing stops, breakeven triggers, partial exits, target/SL hits
+        if state.risk_manager:
+            try:
+                rm_positions = await state.risk_manager.get_positions()
+                for rm_underlying, rm_pos in rm_positions.items():
+                    await state.risk_manager.update_mtm(rm_underlying, row["close"])
+                    exit_sig = await state.risk_manager.get_exit_signal(rm_underlying, row["close"])
+                    if exit_sig and exit_sig.action == SignalAction.EXIT:
+                        ex_ok, ex_reason, ex_qty = await state.risk_manager.can_trade(exit_sig, timestamp)
+                        if ex_ok:
+                            await state.paper_broker.place_order(exit_sig, rm_underlying, timestamp, qty=ex_qty)
+                            state.alerts.append({
+                                "level": "WARNING",
+                                "message": f"Risk exit: {exit_sig.reason}",
+                                "timestamp": timestamp.isoformat()
+                            })
+            except Exception as e:
+                print(f"[RISK EXIT] Error: {e}")
+
+        # Record closed trades to performance monitor
+        if state.performance_monitor and state.paper_broker.closed_trades:
+            for trade in state.paper_broker.closed_trades:
+                if not trade.get("recorded", False):
+                    state.performance_monitor.record_trade(
+                        pnl=trade["pnl"],
+                        entry_time=datetime.fromisoformat(trade["entry_time"]),
+                        exit_time=datetime.fromisoformat(trade["exit_time"]),
+                        symbol=trade["symbol"],
+                        reason=trade["reason"]
+                    )
+                    trade["recorded"] = True
+
+        # Update portfolio history
+        pf = state.paper_broker.get_portfolio_summary()
+        state.daily_pnl_history.append({
+            "time": timestamp.strftime("%H:%M:%S"),
+            "pnl": pf["daily_pnl"],
+            "equity": pf["capital"]
+        })
+
+        # Broadcast update
+        await state.manager.broadcast({
+            "type": "PORTFOLIO",
+            "data": pf
+        })
+
+        # Broadcast positions
+        positions = state.paper_broker.get_positions()
+        if positions:
+            await state.manager.broadcast({
+                "type": "POSITIONS",
+                "data": positions
+            })
+
+        # â”€â”€ NEW: Trim growing lists to prevent memory leaks â”€â”€
+        if len(state.alerts) > 500:
+            state.alerts = state.alerts[-500:]
+        if len(state.daily_pnl_history) > 1000:
+            state.daily_pnl_history = state.daily_pnl_history[-1000:]
+        if len(state.backtest_results) > 50:
+            state.backtest_results = state.backtest_results[-50:]
+        if len(state.optimization_results) > 50:
+            state.optimization_results = state.optimization_results[-50:]
+
+        state.data_index += 1
+        await asyncio.sleep(0.5)  # 0.5s = 1 min market time
+
+
+# ---------- Background Broadcast ----------
+async def broadcast_updates():
+    """Broadcast periodic status heartbeats to WebSocket clients."""
+    while True:
+        await asyncio.sleep(5)
+        if state.bot_running:
+            await state.manager.broadcast({
+                "type": "STATUS",
+                "data": state.get_status().model_dump()
+            })
+
+
+# ---------- Lifespan ----------
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("Trading API Server starting...")
+    task = asyncio.create_task(broadcast_updates())
+    yield
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    print("Trading API Server stopped.")
+
+
+# ---------- FastAPI App ----------
+app = FastAPI(
+    title="NSE Options Trading Bot API",
+    version="3.3.0",
+    lifespan=lifespan
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://localhost:8501",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ---------- Auth Middleware ----------
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    # Exempt login and docs routes
+    exempt_paths = ["/api/login", "/", "/docs", "/openapi.json"]
+    if any(request.url.path.startswith(p) for p in exempt_paths):
+        return await call_next(request)
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+    token = auth_header.split(" ")[1]
+    user_id = auth_manager.verify_token(token)
+    if not user_id:
+        return JSONResponse(status_code=401, content={"detail": "Invalid or expired token"})
+    # Attach user_id to request state for downstream endpoints
+    request.state.user_id = user_id
+    return await call_next(request)
+# ---------- Auth Routes ----------
+@app.post("/api/login")
+async def login(req: LoginRequest):
+    if auth_manager.verify_user(req.username, req.password):
+        token = auth_manager.create_token(req.username)
+        return {"access_token": token, "token_type": "bearer", "user_id": req.username}
+    raise HTTPException(status_code=401, detail="Invalid username or password")
+# ---------- REST Endpoints ----------
+@app.get("/api/status")
+async def get_status():
+    return state.get_status()
+
+@app.get("/api/portfolio")
+async def get_portfolio():
+    if state.paper_broker:
+        return state.paper_broker.get_portfolio_summary()
+    return PortfolioSummary(
+        capital=1_000_000,
+        daily_pnl=0,
+        daily_pnl_pct=0,
+        open_positions=0,
+        margin_used_pct=0,
+        available_margin=1_000_000,
+        net_delta=0,
+        circuit_breaker=False,
+        kill_switch=False
+    )
+
+@app.get("/api/positions")
+async def get_positions():
+    if state.paper_broker:
+        return state.paper_broker.get_positions()
+    return []
+
+@app.get("/api/alerts")
+async def get_alerts(limit: int = 50):
+    return state.alerts[-limit:]
+
+@app.get("/api/backtest-results")
+async def get_backtest_results():
+    # Sanitize inf values for JSON compliance
+    results = []
+    for r in state.backtest_results:
+        r_copy = dict(r)
+        if r_copy.get("profit_factor") == float("inf"):
+            r_copy["profit_factor"] = 999.99
+        results.append(r_copy)
+    return results
+
+@app.get("/api/optimization-results")
+async def get_optimization_results():
+    # Sanitize inf values for JSON compliance
+    results = []
+    for r in state.optimization_results:
+        r_copy = dict(r)
+        if r_copy.get("profit_factor") == float("inf"):
+            r_copy["profit_factor"] = 999.99
+        results.append(r_copy)
+    return results
+
+@app.get("/api/self-improvement-status")
+async def get_self_improvement_status():
+    if state.self_improvement:
+        status = state.self_improvement.get_status()
+        status["enabled"] = state.self_improvement_enabled
+        return status
+    return {
+        "enabled": state.self_improvement_enabled,
+        "is_ab_testing": False,
+        "current_params": {},
+        "candidate_params": None,
+        "optimization_count_today": 0,
+        "total_trades": 0,
+        "win_rate": 0,
+        "sharpe_ratio": 0,
+        "max_drawdown": 0,
+        "should_optimize": False,
+    }
+
+@app.post("/api/control")
+async def control_bot(control: StrategyControl):
+    if control.action == "START":
+        if state.bot_running:
+            return {"status": "already_running"}
+
+        state.bot_running = True
+        state.bot_mode = control.mode or "PAPER"
+        state.current_strategy = control.strategy_name
+        state.start_time = datetime.now()
+
+        # ── NEW: Reset strategy instance on start ──
+        if state.strategy_instance:
+            state.strategy_instance.reset()
+
+        if state.paper_broker:
+            state.paper_broker.reset()
+
+        state.bot_task = asyncio.create_task(run_paper_trading())
+
+        state.alerts.append({
+            "level": "INFO",
+            "message": f"Bot started in {state.bot_mode} mode with strategy '{control.strategy_name}'",
+            "timestamp": datetime.now().isoformat()
+        })
+
+        await state.manager.broadcast({
+            "type": "ALERT",
+            "data": {"level": "INFO", "message": f"Bot started in {state.bot_mode} mode"}
+        })
+        return {"status": "started", "mode": state.bot_mode}
+
+    elif control.action == "STOP":
+        state.bot_running = False
+        state.start_time = None
+        if state.bot_task:
+            state.bot_task.cancel()
+            try:
+                await state.bot_task
+            except asyncio.CancelledError:
+                pass
+            state.bot_task = None
+
+        if state.self_improvement:
+            await state.self_improvement.stop()
+            state.self_improvement = None
+
+        state.alerts.append({
+            "level": "INFO",
+            "message": "Bot stopped",
+            "timestamp": datetime.now().isoformat()
+        })
+        return {"status": "stopped"}
+
+    elif control.action == "SQUARE_OFF":
+        if state.paper_broker:
+            await state.paper_broker.square_off_all(datetime.now())
+
+        state.alerts.append({
+            "level": "WARNING",
+            "message": "Square off initiated",
+            "timestamp": datetime.now().isoformat()
+        })
+
+        await state.manager.broadcast({
+            "type": "ALERT",
+            "data": {"level": "WARNING", "message": "Square off initiated"}
+        })
+        return {"status": "square_off_initiated"}
+
+    elif control.action == "KILL_SWITCH":
+        state.bot_running = False
+        if state.bot_task:
+            state.bot_task.cancel()
+            try:
+                await state.bot_task
+            except asyncio.CancelledError:
+                pass
+            state.bot_task = None
+
+        if state.self_improvement:
+            await state.self_improvement.stop()
+            state.self_improvement = None
+
+        state.alerts.append({
+            "level": "CRITICAL",
+            "message": "KILL SWITCH ACTIVATED",
+            "timestamp": datetime.now().isoformat()
+        })
+
+        await state.manager.broadcast({
+            "type": "ALERT",
+            "data": {"level": "CRITICAL", "message": "KILL SWITCH ACTIVATED"}
+        })
+        return {"status": "kill_switch_activated"}
+
+    elif control.action == "TOGGLE_SELF_IMPROVE":
+        state.self_improvement_enabled = not state.self_improvement_enabled
+        status = "enabled" if state.self_improvement_enabled else "disabled"
+
+        state.alerts.append({
+            "level": "INFO",
+            "message": f"Self-improvement {status}",
+            "timestamp": datetime.now().isoformat()
+        })
+        return {
+            "status": f"self_improvement_{status}",
+            "enabled": state.self_improvement_enabled,
+            "mode": state.bot_mode,
+            "strategy": state.current_strategy
+        }
+
+    else:
+        raise HTTPException(400, f"Unknown action: {control.action}")
+
+@app.post("/api/backtest")
+async def run_backtest(request: BacktestRequest):
+    """Run backtest synchronously and return full results."""
+    try:
+        if request.mode == "real":
+            # Fetch real historical data
+            from backend.historical_data import get_data_provider
+
+            end_dt = request.end_date or datetime.now().strftime("%Y-%m-%d")
+            start_dt = request.start_date or (datetime.now() - timedelta(days=request.days)).strftime("%Y-%m-%d")
+
+            provider = get_data_provider(source=request.data_source or "auto")
+            data = provider.get_data(
+                symbol=request.symbol,
+                start_date=start_dt,
+                end_date=end_dt,
+                interval=request.interval or "5minute"
+            )
+            print(f"[BACKTEST] Using real data: {request.symbol} from {start_dt} to {end_dt}")
+
+        elif request.mode == "csv" and request.data_path:
+            data = DataGenerator.load_csv_data(request.data_path)
+
+        else:
+            # ── FIXED: Synthetic data with symbol-specific volatility ──
+            data = DataGenerator.generate_synthetic_data(
+                days=request.days, 
+                symbol=request.symbol,
+                seed=None
+            )
+
+        strategy_cls = StrategyRegistry.get(request.strategy)
+        config_cls = StrategyRegistry.get_config_class(request.strategy)
+
+        config = config_cls(name=request.strategy)
+        strategy = strategy_cls(config)
+        # ── NEW: Reset strategy before backtest ──
+        strategy.reset()
+
+        risk_config = RiskConfig()
+        engine = BacktestEngine(strategy, risk_config, data, symbol=request.symbol)
+        result = await engine.run()
+
+        # Build full result with all fields the dashboard expects
+        import math
+        ohlc_data = []
+        for idx, row in data.iterrows():
+            # Robust timestamp serialization
+            if hasattr(idx, 'isoformat'):
+                ts = idx.isoformat()
+            else:
+                ts = str(idx)
+
+            # Sanitize any NaN/inf in OHLC data
+            def safe_float(v):
+                v = float(v)
+                if math.isnan(v) or math.isinf(v):
+                    return 0.0
+                return round(v, 4)
+
+            ohlc_data.append({
+                "timestamp": ts,
+                "open": safe_float(row["open"]),
+                "high": safe_float(row["high"]),
+                "low": safe_float(row["low"]),
+                "close": safe_float(row["close"]),
+                "volume": int(row["volume"]) if not math.isnan(float(row["volume"])) else 0
+            })
+
+        result_data = {
+            "strategy": request.strategy,
+            "symbol": request.symbol,
+            "total_pnl": result.total_pnl,
+            "total_pnl_pct": result.total_pnl_pct,
+            "win_rate": result.win_rate,
+            "sharpe_ratio": result.sharpe_ratio,
+            "max_drawdown": result.max_drawdown,
+            "total_trades": result.total_trades,
+            "profit_factor": 999.99 if result.profit_factor == float("inf") else result.profit_factor,
+            "avg_trade_pnl": result.avg_profit_per_trade,
+            "max_consecutive_losses": result.max_consecutive_losses,
+            "params": result.params if result.params else {},
+            "equity_curve": [e["equity"] for e in result.equity_curve] if result.equity_curve else [],
+            "trades": result.trades if result.trades else [],
+            "ohlc_data": ohlc_data,
+            "timestamp": datetime.now().isoformat()
+        }
+        state.backtest_results.append(result_data)
+
+        return result_data
+
+    except Exception as e:
+        import traceback
+        error_msg = f"{str(e)}\n{traceback.format_exc()}"
+        print(f"[BACKTEST ERROR] {error_msg}")
+        raise HTTPException(500, detail=str(e))
+
+
+
+@app.post("/api/backtest/compare")
+async def compare_strategies(request: StrategyCompareRequest):
+    """Run all strategies on identical data and return ranked comparison."""
+    try:
+        # 1. Load data ONCE (shared across all strategies)
+        if request.mode == "real":
+            from backend.historical_data import get_data_provider
+            end_dt = request.end_date or datetime.now().strftime("%Y-%m-%d")
+            start_dt = request.start_date or (datetime.now() - timedelta(days=request.days)).strftime("%Y-%m-%d")
+            provider = get_data_provider(source=request.data_source or "auto")
+            data = provider.get_data(
+                symbol=request.symbol,
+                start_date=start_dt,
+                end_date=end_dt,
+                interval=request.interval or "5minute"
+            )
+        elif request.mode == "csv" and request.data_path:
+            data = DataGenerator.load_csv_data(request.data_path)
+        else:
+            # ── FIXED: Symbol-specific synthetic data ──
+            data = DataGenerator.generate_synthetic_data(
+                days=request.days, 
+                symbol=request.symbol,
+                seed=None
+            )
+
+        strategies = StrategyRegistry.list_strategies()
+        results = []
+        shared_ohlc = None
+
+        # 2. Run each strategy on identical data
+        for strat_name in strategies:
+            try:
+                strategy_cls = StrategyRegistry.get(strat_name)
+                config_cls = StrategyRegistry.get_config_class(strat_name)
+                config = config_cls(name=strat_name)
+                strategy = strategy_cls(config)
+                # ── NEW: Reset strategy before each comparison run ──
+                strategy.reset()
+
+                risk_config = RiskConfig()
+                engine = BacktestEngine(strategy, risk_config, data, symbol=request.symbol)
+                result = await engine.run()
+
+                # Build OHLC once
+                if shared_ohlc is None and result.trades:
+                    import math
+                    shared_ohlc = []
+                    for idx, row in data.iterrows():
+                        ts = idx.isoformat() if hasattr(idx, 'isoformat') else str(idx)
+                        def safe_float(v):
+                            v = float(v)
+                            return 0.0 if math.isnan(v) or math.isinf(v) else round(v, 4)
+                        shared_ohlc.append({
+                            "timestamp": ts,
+                            "open": safe_float(row["open"]),
+                            "high": safe_float(row["high"]),
+                            "low": safe_float(row["low"]),
+                            "close": safe_float(row["close"]),
+                            "volume": int(row["volume"]) if not math.isnan(float(row["volume"])) else 0
+                        })
+
+                # Composite score
+                trade_penalty = -50 if result.total_trades == 0 else 0
+                score = (
+                    result.total_pnl_pct * 2.0 +
+                    result.sharpe_ratio * 10.0 +
+                    result.win_rate * 0.5 -
+                    result.max_drawdown * 1.5 +
+                    trade_penalty
+                )
+
+                results.append(StrategyComparisonResult(
+                    strategy=strat_name,
+                    total_pnl_pct=result.total_pnl_pct,
+                    win_rate=result.win_rate,
+                    sharpe_ratio=result.sharpe_ratio,
+                    max_drawdown=result.max_drawdown,
+                    total_trades=result.total_trades,
+                    profit_factor=999.99 if result.profit_factor == float("inf") else result.profit_factor,
+                    avg_trade_pnl=result.avg_profit_per_trade,
+                    score=round(score, 2),
+                    trades=result.trades if result.trades else [],
+                    ohlc_data=shared_ohlc if strat_name == strategies[0] else None
+                ))
+
+            except Exception as e:
+                print(f"[COMPARE] Strategy {strat_name} failed: {e}")
+                results.append(StrategyComparisonResult(
+                    strategy=strat_name,
+                    total_pnl_pct=0.0, win_rate=0.0, sharpe_ratio=0.0,
+                    max_drawdown=0.0, total_trades=0, profit_factor=0.0,
+                    avg_trade_pnl=0.0, score=-999.0, trades=[], ohlc_data=None
+                ))
+
+        # 3. Rank by score descending
+        results.sort(key=lambda x: x.score, reverse=True)
+
+        # Attach OHLC to winner if missing
+        if shared_ohlc and not any(r.ohlc_data for r in results):
+            results[0].ohlc_data = shared_ohlc
+
+        return {
+            "winner": results[0].strategy if results else None,
+            "symbol": request.symbol,
+            "data_mode": request.mode,
+            "comparisons": [r.model_dump() for r in results],
+            "timestamp": datetime.now().isoformat()
+        }
+
+    except Exception as e:
+        import traceback
+        print(f"[COMPARE ERROR] {str(e)}\n{traceback.format_exc()}")
+        raise HTTPException(500, detail=str(e))
+
+@app.post("/api/optimize")
+async def run_optimization(request: OptimizationRequest):
+    """Run optimization synchronously and return full results."""
+    try:
+        from backend.auto_improvement_agent import AutoImprovementAgent
+
+        # ── FIXED: Symbol-specific synthetic data ──
+        data = DataGenerator.generate_synthetic_data(
+            days=request.days, 
+            symbol=request.symbol,
+            seed=None
+        )
+
+        agent = AutoImprovementAgent(
+            strategy_name=request.strategy,
+            data=data,
+            output_dir="data/backtest_results"
+        )
+
+        if request.mode == "adaptive":
+            result = await agent.run_adaptive_search(iterations=request.iterations)
+        else:
+            result = await agent.run_grid_search(max_combinations=request.iterations)
+
+        if result:
+            opt_data = {
+                "strategy_name": request.strategy,
+                "best_params": result.best_params,
+                "best_score": result.best_score,
+                "improvement_pct": result.improvement_pct,
+                "train_pnl": result.train_results.total_pnl_pct,
+                "test_pnl": result.test_results.total_pnl_pct,
+                "baseline_score": result.baseline_score,
+                "timestamp": datetime.now().isoformat()
+            }
+            state.optimization_results.append(opt_data)
+            return opt_data
+        else:
+            raise HTTPException(500, detail="Optimization returned no result")
+
+    except Exception as e:
+        import traceback
+        error_msg = f"{str(e)}\n{traceback.format_exc()}"
+        print(f"[OPTIMIZE ERROR] {error_msg}")
+        raise HTTPException(500, detail=str(e))
+
+
+# ---------- WebSocket ----------
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await state.manager.connect(websocket)
+    try:
+        await websocket.send_json({
+            "type": "STATUS",
+            "data": state.get_status().model_dump()
+        })
+
+        while True:
+            try:
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+                msg = json.loads(data)
+                if msg.get("action") == "ping":
+                    await websocket.send_json({
+                        "type": "PONG",
+                        "timestamp": datetime.now().isoformat()
+                    })
+            except asyncio.TimeoutError:
+                await websocket.send_json({
+                    "type": "HEARTBEAT",
+                    "timestamp": datetime.now().isoformat()
+                })
+    except WebSocketDisconnect:
+        await state.manager.disconnect(websocket)
+
+
+# ---------- Entry Point ----------
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--host", default="0.0.0.0", help="Host to bind (0.0.0.0 for LAN, 127.0.0.1 for local only)")
+    parser.add_argument("--port", type=int, default=8000, help="Port to bind")
+    parser.add_argument("--no-reload", action="store_true", help="Disable auto-reload")
+    args = parser.parse_args()
+
+    print(f"🚀 API Server starting on http://{args.host}:{args.port}")
+    print(f"   Local access:    http://127.0.0.1:{args.port}")
+    print(f"   Network access:  http://<YOUR_IP>:{args.port}")
+    print(f"   To find your IP: ipconfig (Windows) or ifconfig/ip addr (Linux/Mac)")
+
+    uvicorn.run("backend.api_server:app", host=args.host, port=args.port, reload=not args.no_reload)

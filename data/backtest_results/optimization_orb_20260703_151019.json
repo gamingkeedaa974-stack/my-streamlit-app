@@ -1,0 +1,30 @@
+{
+  "strategy": "orb",
+  "generated_at": "2026-07-03T15:10:19.700674",
+  "best_params": {
+    "or_minutes": "15",
+    "breakout_buffer_pct": 0.002,
+    "stop_loss_pct": 0.3,
+    "target_pct": 0.5
+  },
+  "best_score": 20.611929192043732,
+  "baseline_score": 9.810500537293127,
+  "improvement_pct": 110.10068868240326,
+  "train_results": {
+    "total_pnl_pct": -0.15283679999999972,
+    "win_rate": 50.0,
+    "max_drawdown": 0.5090646446591559,
+    "sharpe_ratio": -0.9436714325834772,
+    "profit_factor": 0.5294221969337297,
+    "total_trades": 2
+  },
+  "test_results": {
+    "total_pnl_pct": 0.0,
+    "win_rate": 0.0,
+    "max_drawdown": 0.0,
+    "sharpe_ratio": 0.0,
+    "profit_factor": 0.0,
+    "total_trades": 0
+  },
+  "all_combinations_tested": 30
+}

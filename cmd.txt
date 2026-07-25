@@ -1,0 +1,16 @@
+# 1. Start the backend
+cd C:\Users\Imman\Kiwi_Bot_model
+python -m venv venv
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+.\venv\Scripts\Activate.ps1
+pip install fastapi uvicorn pydantic websockets aiofiles fyers-apiv3 ta pandas numpy
+python api_server.py
+
+# 2. In another terminal, start the frontend
+cd trading-dashboard
+npm install
+npm run dev
+
+# 3. Open http://localhost:5173
+# You'll see the dashboard with mock data
+# Test the controls — they work even without a live bot

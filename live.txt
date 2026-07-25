@@ -1,0 +1,23 @@
+# 1. Deploy backend to AWS Mumbai (ap-south-1)
+#    - Use EC2 t3.medium or better
+#    - Static IP (Elastic IP) — SEBI requirement
+#    - Security group: open 8000 for your IP only
+
+# 2. Build frontend
+cd trading-dashboard
+npm run build
+
+# 3. Serve static files via nginx or embed in FastAPI
+#    - Copy dist/ to /var/www/html/
+#    - Or use FastAPI's StaticFiles
+
+# 4. Set environment variables for production
+export FYERS_APP_ID=xxx
+export FYERS_ACCESS_TOKEN=xxx
+export ALGO_ID=EXCHANGE-ISSUED-ID
+
+# 5. Use PM2 or systemd to keep backend alive
+pm2 start api_server.py --name trading-bot
+
+# 6. Access via https://your-domain.com
+#    - Use CloudFlare or AWS ALB for SSL
