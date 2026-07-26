@@ -1,8 +1,2 @@
 ﻿[server]
-# Streamlit server configuration
 pythonVersion = "3.11"
-# Optional: set a fixed port
-# port = 8501
-# Optional: disable CORS in local environments
-# enableCORS = false
-
