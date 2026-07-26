@@ -14,6 +14,7 @@ Features:
 - Real exit reasons with color coding
 """
 
+import os
 import streamlit as st
 import requests
 import time
@@ -137,139 +138,237 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------- API Client ----------
-API_URL = "http://localhost:8000"
+API_URL = os.environ.get("API_URL", "http://localhost:8000")
 
 # ---------- API Helpers ----------
 def _auth_headers():
-    token = st.session_state.get("jwt_token")
+    token = st.session_state.get("jwt_token", "")
     if token:
         return {"Authorization": f"Bearer {token}"}
     return {}
 
-def _safe_get(endpoint: str, timeout: float = 3.0) -> Optional[Any]:
+def _normalize_response(resp):
     try:
-        headers = {}
-        token = st.session_state.get("jwt_token")
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-        resp = requests.get(f"{API_URL}{endpoint}", headers=headers, timeout=timeout)
-        return resp.json() if resp.status_code == 200 else None
+        parsed = resp.json()
+        if parsed is None:
+            return {"__error__": "Empty JSON response", "status_code": resp.status_code, "body": resp.text}
+        return parsed
     except Exception:
         return None
+
+
+def _build_error_payload(endpoint: str, resp):
+    parsed = _normalize_response(resp)
+    body = resp.text or resp.reason
+    if isinstance(parsed, dict):
+        return {
+            "__error__": parsed.get("detail") or parsed.get("message") or parsed.get("error") or body,
+            "status_code": resp.status_code,
+            "body": body,
+        }
+    return {"__error__": f"{resp.request.method} {endpoint} failed", "status_code": resp.status_code, "body": body}
+
+
+def _safe_get(endpoint: str, timeout: float = 3.0) -> Optional[Any]:
+    try:
+        resp = requests.get(f"{API_URL}{endpoint}", headers=_auth_headers(), timeout=timeout)
+        if resp.status_code == 200:
+            response = _normalize_response(resp)
+            return response if response is not None else {"__error__": "Empty response body", "status_code": resp.status_code, "body": resp.text}
+        return _build_error_payload(endpoint, resp)
+    except Exception as exc:
+        return {"__error__": f"GET {endpoint} exception: {exc}", "status_code": None, "body": str(exc)}
+
 
 def _safe_post(endpoint: str, payload: dict, timeout: float = 10.0) -> Optional[Any]:
     try:
-        headers = {"Content-Type": "application/json"}
-        token = st.session_state.get("jwt_token")
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-        resp = requests.post(f"{API_URL}{endpoint}", json=payload, headers=headers, timeout=timeout)
-        return resp.json() if resp.status_code in (200, 201) else None
-    except Exception:
-        return None
+        resp = requests.post(f"{API_URL}{endpoint}", json=payload, headers=_auth_headers(), timeout=timeout)
+        if resp.status_code in (200, 201):
+            response = _normalize_response(resp)
+            return response if response is not None else {"__error__": "Empty response body", "status_code": resp.status_code, "body": resp.text}
+        return _build_error_payload(endpoint, resp)
+    except Exception as exc:
+        return {"__error__": f"POST {endpoint} exception: {exc}", "status_code": None, "body": str(exc)}
 
-# ---------- Auth Screen ----------
-def render_login_screen():
-    st.markdown("""
-    <style>
-        section[data-testid="stSidebar"] { display: none !important; }
-        div[data-testid="stToolbar"] { display: none !important; }
-        footer { display: none !important; }
-        .block-container {
-            padding-top: 8vh !important;
-            max-width: 460px !important;
-            width: 100% !important;
-            margin: auto !important;
-        }
-        @media (max-width: 600px) {
-            .block-container { width: 95% !important; padding-top: 5vh !important; }
-        }
-        .login-card {
-            background: linear-gradient(145deg, #0f172a, #1e293b);
-            border: 1px solid #334155;
-            border-radius: 16px;
-            padding: 2.5rem 2rem 1.5rem 2rem;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(96,165,250,0.08);
-        }
-        .login-logo { text-align: center; margin-bottom: 0.3rem; }
-        .login-logo-icon { font-size: 2.8rem; display: block; margin-bottom: 0.5rem; }
-        .login-title { font-size: 1.5rem; font-weight: 800; color: #e2e8f0; letter-spacing: 0.02em; }
-        .login-subtitle { text-align: center; color: #64748b; font-size: 0.85rem; margin-bottom: 1.8rem; }
-        .login-card div[data-testid="stTextInput"] > div > div > input {
-            background: #0f172a !important;
-            border: 1px solid #334155 !important;
-            border-radius: 8px !important;
-            padding: 0.75rem 1rem !important;
-            color: #e2e8f0 !important;
-            font-size: 1rem !important;
-            min-height: 46px !important;
-            width: 100% !important;
-            box-sizing: border-box !important;
-        }
-        .login-card div[data-testid="stTextInput"] > div > div > input:focus {
-            border-color: #60a5fa !important;
-            box-shadow: 0 0 0 2px rgba(96,165,250,0.2) !important;
-        }
-        .login-card [data-testid="stFormSubmitButton"] button {
-            background: linear-gradient(135deg, #3b82f6, #2563eb) !important;
-            border: none !important; border-radius: 8px !important;
-            padding: 0.75rem !important; font-size: 1rem !important;
-            font-weight: 700 !important; color: white !important;
-            width: 100% !important; margin-top: 0.5rem !important;
-        }
-        .login-card div[data-testid="stException"] {
-            background: #450a0a30 !important; border: 1px solid #7f1d1d !important;
-            border-radius: 8px !important;
-        }
-        .login-footer { text-align: center; color: #475569; font-size: 0.72rem; margin-top: 1.2rem; }
-    </style>
-    """, unsafe_allow_html=True)
-    st.markdown('<div class="login-card">'
-                '<div class="login-logo">'
-                '<span class="login-logo-icon">&#x1F4C8;</span>'
-                '<div class="login-title">NSE Trading Bot</div>'
-                '</div>'
-                '<div class="login-subtitle">Sign in to your trading terminal</div>', unsafe_allow_html=True)
-    with st.form("login_form", clear_on_submit=False):
-        username = st.text_input("Username", value="admin", key="login_user",
-                                  label_visibility="collapsed", placeholder="Username")
-        password = st.text_input("Password", type="password", key="login_pass",
-                                  label_visibility="collapsed", placeholder="Password")
-        submit = st.form_submit_button("Sign In", type="primary", use_container_width=True)
-    st.markdown('</div>'
-                '<div class="login-footer">v3.7 | Secure JWT Auth | Paper &amp; Live Trading</div>',
-                unsafe_allow_html=True)
-    if submit:
-        if not username or not password:
-            st.error("Please enter both username and password")
-            return
-        with st.spinner("Authenticating..."):
-            payload = {"username": username, "password": password}
-            try:
-                resp = requests.post(f"{API_URL}/api/login", json=payload, timeout=5.0)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    st.session_state.authenticated = True
-                    st.session_state.jwt_token = data.get("access_token")
-                    st.session_state.user_id = data.get("user_id")
-                    st.rerun()
-                else:
-                    st.error("Invalid username or password")
-            except requests.exceptions.ConnectionError:
-                st.error("Cannot connect to backend. Is the bot running?")
-            except requests.exceptions.Timeout:
-                st.error("Login timed out. Backend may be slow to start.")
-            except Exception as e:
-                st.error(f"Login error: {e}")
+
+def _extract_error_message(result: Any) -> str:
+    if result is None:
+        return "Unknown error"
+    if isinstance(result, dict):
+        for key in ("detail", "message", "error", "__error__", "body"):
+            if key in result and result[key]:
+                return str(result[key])
+        return str(result)
+    return str(result)
+
+# ---------- Session State Initialization ----------
+def init_session_state():
+    defaults = {
+        "si_enabled": False,
+        "si_toggled": False,
+        "mode": "PAPER",
+        "auto_strategy": False,
+        "selected_strategy": "orb",
+        "selected_symbols": ["NSE:NIFTY50-INDEX"],
+        "show_nse_data": True,
+        "bt_running": False,
+        "bt_cancelled": False,
+        "bt_strat": "orb",
+        "bt_sym": "NIFTY50",
+        "bt_days": 30,
+        "bt_mode": "synthetic",
+        "bt_source": "auto",
+        "bt_csv": "",
+        "opt_strat": "orb",
+        "opt_mode": "adaptive",
+        "opt_iters": 30,
+        "opt_days": 60,
+        "last_backtest_result": None,
+        "last_compare_result": None,
+        "last_opt_result": None,
+        "kill_confirm": False,
+        "live_broker": "Fyers",
+        "live_key": "",
+        "live_secret": "",
+        "set_capital": 1000000,
+        "set_lot": 25,
+        "set_maxloss": 3,
+        "set_risk": 1.0,
+        "set_maxpos": 2,
+        "set_si_interval": 5,
+        "set_si_changes": 3,
+        "set_telegram": False,
+        "set_telegram_token": "",
+        "set_telegram_chat": "",
+        "login_user": "",
+        "login_pass": "",
+        "login_success": False,
+    }
+    for key, val in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = val
+
+# ── FIXED: Removed APIDataStore class and daemon thread ──
+# Using st.cache_data for thread-safe polling instead
+
+def get_data():
+    """Get fresh data. Uses cache for 2s, then refreshes."""
+    token = st.session_state.get("jwt_token", "")
+    data = _fetch_all_data(token) or {}
+
+    if not isinstance(data, dict):
+        data = {}
+
+    portfolio = data.get("portfolio") or {}
+    pnl_history = []
+    if portfolio:
+        pnl_history.append({
+            "time": datetime.now().strftime("%H:%M:%S"),
+            "pnl": portfolio.get("daily_pnl", 0),
+            "equity": portfolio.get("capital", 1_000_000)
+        })
+
+    return {
+        "status": data.get("status"),
+        "portfolio": portfolio,
+        "positions": list(data.get("positions", [])),
+        "alerts": list(data.get("alerts", [])),
+        "backtest_results": list(data.get("backtest_results", [])),
+        "optimization_results": list(data.get("optimization_results", [])),
+        "self_improvement": data.get("self_improvement"),
+        "pnl_history": pnl_history,
+        "last_update": datetime.now(),
+        "ws_connected": data.get("status") is not None,
+        "nse_data": data.get("nse_data") or None,
+    }
+
+# ── NEW: Thread-safe data fetcher using Streamlit caching ──
+@st.cache_data(ttl=2, show_spinner=False)
+def _fetch_all_data(jwt_token: str = "") -> Dict:
+    """Fetch all data from API. Cached for 2 seconds to reduce load."""
+    data = _safe_get("/api/dashboard")
+    if isinstance(data, dict) and "__error__" not in data:
+        return data
+
+    status = _safe_get("/api/status") or {}
+    portfolio = _safe_get("/api/portfolio") or {}
+    positions = _safe_get("/api/positions") or []
+    alerts = _safe_get("/api/alerts") or []
+    backtest_results = _safe_get("/api/backtest-results") or []
+    optimization_results = _safe_get("/api/optimization-results") or []
+
+    return {
+        "status": status if isinstance(status, dict) and "__error__" not in status else None,
+        "portfolio": portfolio if isinstance(portfolio, dict) and "__error__" not in portfolio else {},
+        "positions": positions if isinstance(positions, list) else [],
+        "alerts": alerts if isinstance(alerts, list) else [],
+        "backtest_results": backtest_results if isinstance(backtest_results, list) else [],
+        "optimization_results": optimization_results if isinstance(optimization_results, list) else [],
+        "self_improvement": None,
+        "nse_data": None,
+    }
 
 # ═══════════════════════════════════════════════════════════
 # SIDEBAR — COMMAND CENTER
 # ═══════════════════════════════════════════════════════════
+def render_login():
+    st.title("NSE Options Trading Bot")
+    st.subheader("Login")
+
+    if "login_user" not in st.session_state:
+        st.session_state.login_user = ""
+    if "login_pass" not in st.session_state:
+        st.session_state.login_pass = ""
+    if "login_error" not in st.session_state:
+        st.session_state.login_error = ""
+    if "login_success" not in st.session_state:
+        st.session_state.login_success = False
+
+    def _attempt_login():
+        username = st.session_state.get("login_user", "")
+        password = st.session_state.get("login_pass", "")
+        if not username or not password:
+            st.session_state.login_error = "Please enter both username and password."
+            st.session_state.login_pass = ""
+            return
+
+        r = _safe_post("/api/login", {"username": username, "password": password})
+        if not isinstance(r, dict) or r.get("__error__"):
+            err_msg = _extract_error_message(r) if isinstance(r, dict) else "Unable to connect to the API."
+            st.session_state.login_error = f"Login failed: {err_msg}"
+            st.session_state.login_pass = ""
+            return
+
+        token = r.get("access_token") or r.get("token")
+        if token:
+            st.session_state.jwt_token = token
+            st.session_state.login_error = ""
+            st.session_state.login_pass = ""
+            st.session_state.login_user = ""
+            st.session_state.login_success = True
+            return
+
+        error_text = r.get("detail") or r.get("message") or _extract_error_message(r) or "Invalid username or password."
+        st.session_state.login_error = f"Login failed: {error_text}"
+        st.session_state.login_pass = ""
+
+    st.text_input("Username", key="login_user")
+    st.text_input("Password", type="password", key="login_pass")
+    st.button("Login", type="primary", use_container_width=True, on_click=_attempt_login)
+
+    if st.session_state.login_error:
+        st.error(st.session_state.login_error)
+
+
 def render_sidebar(data):
     with st.sidebar:
         st.markdown('<div class="sidebar-header">⚡ NSE BOT v3.2</div>', unsafe_allow_html=True)
+        if st.button("Logout", use_container_width=True, key="logout_button"):
+            st.session_state.pop("jwt_token", None)
+            st.session_state.pop("login_user", None)
+            st.session_state.pop("login_pass", None)
+            st.rerun()
 
-        data = get_data()
         status = data["status"] or {}
         portfolio = data["portfolio"] or {}
         si = data["self_improvement"] or {}
@@ -301,13 +400,17 @@ def render_sidebar(data):
             pnl_class = "mini-metric-positive" if daily_pnl >= 0 else "mini-metric-negative"
             st.markdown(f'<div class="mini-metric"><div class="mini-metric-label">Daily P&L</div><div class="mini-metric-value {pnl_class}">₹{daily_pnl:,.0f}</div></div>', unsafe_allow_html=True)
             st.markdown(f'<div class="mini-metric"><div class="mini-metric-label">Capital</div><div class="mini-metric-value">₹{portfolio.get("capital", 1_000_000):,.0f}</div></div>', unsafe_allow_html=True)
+            configured_capital = st.session_state.get("set_capital", 1_000_000)
+            st.markdown(f'<div class="mini-metric"><div class="mini-metric-label">Configured Capital</div><div class="mini-metric-value">₹{configured_capital:,.0f}</div></div>', unsafe_allow_html=True)
             st.markdown(f'<div class="mini-metric"><div class="mini-metric-label">Positions</div><div class="mini-metric-value">{portfolio.get("open_positions", 0)}</div></div>', unsafe_allow_html=True)
             net_delta = portfolio.get("net_delta", 0)
             net_gamma = portfolio.get("net_gamma", 0)
             net_theta = portfolio.get("net_theta", 0)
             st.markdown(f'<div class="mini-metric"><div class="mini-metric-label">Δ {net_delta:+.2f} | Γ {net_gamma:+.4f} | Θ {net_theta:+.2f}</div></div>', unsafe_allow_html=True)
         else:
+            configured_capital = st.session_state.get("set_capital", 1_000_000)
             st.markdown('<div class="mini-metric"><div class="mini-metric-label">Daily P&L</div><div class="mini-metric-value">₹0</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="mini-metric"><div class="mini-metric-label">Configured Capital</div><div class="mini-metric-value">₹{configured_capital:,.0f}</div></div>', unsafe_allow_html=True)
 
         st.markdown('<div class="sidebar-section-title">Quick Actions</div>', unsafe_allow_html=True)
 
@@ -372,11 +475,7 @@ def render_sidebar(data):
             st.markdown('<span class="status-pill pill-gray">● OFF</span>', unsafe_allow_html=True)
 
         st.markdown('<hr class="thin-divider">', unsafe_allow_html=True)
-        if st.button("LOGOUT", key="sidebar_logout", use_container_width=True):
-            st.session_state.authenticated = False
-            st.session_state.jwt_token = None
-            st.rerun()
-        st.caption("v3.7 | NSE Bot | JWT Auth")
+        st.caption("v3.3 | NSE Bot | Thread-Safe Fix")
 
 # ═══════════════════════════════════════════════════════════
 # STATUS BAR
@@ -427,8 +526,6 @@ def render_status_bar(data):
     with cols[0]:
         st.markdown(" ".join(pills), unsafe_allow_html=True)
     with cols[1]:
-        if st.button("Refresh", key="statusbar_refresh", use_container_width=True):
-            st.rerun()
         st.markdown(f'<div style="text-align:right; font-size:0.75rem; color:#64748b; font-family:monospace;">{h:02d}:{m:02d}:{s:02d} | {last_up}</div>', unsafe_allow_html=True)
 
 # ═══════════════════════════════════════════════════════════
@@ -990,7 +1087,7 @@ def tab_backtest():
     with bcols[1]:
         st.selectbox("Symbol", ["NIFTY50", "BANKNIFTY", "FINNIFTY", "SENSEX"], key="bt_sym")
     with bcols[2]:
-        st.number_input("Days", 1, 120, 5, key="bt_days")
+        st.number_input("Days", 1, 120, value=st.session_state.get("bt_days", 5), key="bt_days")
     with bcols[3]:
         st.selectbox("Data", ["synthetic", "real", "csv_file"], key="bt_mode")
     with bcols[4]:
@@ -1004,6 +1101,10 @@ def tab_backtest():
     with bcols[5]:
         is_auto = st.session_state.get("bt_strat", "orb") == "auto"
         btn_label = "🚀 COMPARE ALL" if is_auto else "🚀 RUN"
+
+        # Clear cancelled state when not running
+        if not st.session_state.get("bt_running", False):
+            st.session_state.bt_cancelled = False
 
         # ── NEW: Cancel button during backtest ──
         if st.session_state.get("bt_running", False):
@@ -1043,24 +1144,26 @@ def tab_backtest():
             if is_auto:
                 result = _safe_post("/api/backtest/compare", payload, timeout=120.0)
                 st.session_state.bt_running = False
+                st.session_state.bt_cancelled = False
                 if result and isinstance(result, dict) and "comparisons" in result:
                     st.session_state.last_compare_result = result
                     st.success(f"✅ Winner: {result.get('winner', 'Unknown').upper()}")
                     time.sleep(0.5)
                     st.rerun()
                 else:
-                    st.error("❌ Comparison failed. Is backend running?")
+                    st.error("❌ Comparison failed. Please try again later.")
             else:
                 payload["strategy"] = st.session_state.get("bt_strat", "orb")
                 result = _safe_post("/api/backtest", payload, timeout=60.0)
                 st.session_state.bt_running = False
+                st.session_state.bt_cancelled = False
                 if result and isinstance(result, dict) and "total_trades" in result:
                     st.session_state.last_backtest_result = result
                     st.success(f"✅ Backtest complete! {result.get('total_trades', 0)} trades")
                     time.sleep(0.5)
                     st.rerun()
                 else:
-                    st.error("❌ Backtest failed. Is backend running?")
+                    st.error("❌ Backtest failed. Please try again later.")
 
     # ── COMPARISON VIEW (AUTO MODE) ──
     compare_result = st.session_state.get("last_compare_result")
@@ -1318,9 +1421,9 @@ def tab_optimize():
                     time.sleep(0.5)
                     st.rerun()
                 elif result and isinstance(result, dict):
-                    st.error(f"❌ Optimization error: {result.get('detail', 'Unknown error')}")
+                    st.error("❌ Optimization failed. Please check the backend or try again.")
                 else:
-                    st.error("❌ Failed. Is backend running on localhost:8000?")
+                    st.error("❌ Failed. Is the backend running on localhost:8000?")
     st.markdown('</div>', unsafe_allow_html=True)
     st.markdown('<div class="toolbar-spacer"></div>', unsafe_allow_html=True)
 
@@ -1414,36 +1517,60 @@ def tab_settings():
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown('<div class="card-header">⚙️ Trading Settings</div>', unsafe_allow_html=True)
 
-    c1, c2 = st.columns(2)
-    with c1: st.number_input("Capital (₹)", 100000, 5000000, 1000000, step=50000, key="set_capital")
-    with c2: st.number_input("Lot Size", 1, 100, 25, key="set_lot")
+    with st.form("settings_form"):
+        c1, c2 = st.columns(2)
+        with c1:
+            st.number_input("Capital (₹)", 100000, 5000000, st.session_state.get("set_capital", 1000000), step=50000, key="set_capital")
+        with c2:
+            st.number_input("Lot Size", 1, 100, st.session_state.get("set_lot", 25), key="set_lot")
 
-    st.divider()
-    st.subheader("Risk Limits")
-    c1, c2, c3 = st.columns(3)
-    with c1: st.slider("Max Daily Loss %", 1, 10, 3, key="set_maxloss")
-    with c2: st.slider("Max Risk/Trade %", 0.5, 5.0, 1.0, step=0.5, key="set_risk")
-    with c3: st.slider("Max Positions", 1, 5, 2, key="set_maxpos")
+        st.divider()
+        st.subheader("Risk Limits")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.slider("Max Daily Loss %", 1, 10, st.session_state.get("set_maxloss", 3), key="set_maxloss")
+        with c2:
+            st.slider("Max Risk/Trade %", 0.5, 5.0, st.session_state.get("set_risk", 1.0), step=0.5, key="set_risk")
+        with c3:
+            st.slider("Max Positions", 1, 5, st.session_state.get("set_maxpos", 2), key="set_maxpos")
 
-    st.divider()
-    st.subheader("Self-Improvement")
-    c1, c2 = st.columns(2)
-    with c1: st.slider("Check Interval (min)", 1, 30, 5, key="set_si_interval")
-    with c2: st.slider("Max Changes/Day", 1, 10, 3, key="set_si_changes")
+        st.divider()
+        st.subheader("Self-Improvement")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.slider("Check Interval (min)", 1, 30, st.session_state.get("set_si_interval", 5), key="set_si_interval")
+        with c2:
+            st.slider("Max Changes/Day", 1, 10, st.session_state.get("set_si_changes", 3), key="set_si_changes")
 
-    st.divider()
-    st.subheader("Notifications")
-    telegram_enabled = st.toggle("Telegram Alerts", key="set_telegram")
-    if telegram_enabled:
-        st.text_input("Bot Token", type="password", key="set_telegram_token")
-        st.text_input("Chat ID", key="set_telegram_chat")
+        st.divider()
+        st.subheader("Notifications")
+        telegram_enabled = st.checkbox("Telegram Alerts", value=st.session_state.get("set_telegram", False), key="set_telegram")
+        if telegram_enabled:
+            st.text_input("Bot Token", type="password", value=st.session_state.get("set_telegram_token", ""), key="set_telegram_token")
+            st.text_input("Chat ID", value=st.session_state.get("set_telegram_chat", ""), key="set_telegram_chat")
 
-    st.divider()
-    st.subheader("Display")
-    st.toggle("Show NSE Market Data Panel", value=st.session_state.get("show_nse_data", True), key="show_nse_data")
+        st.divider()
+        st.subheader("Display")
+        st.checkbox("Show NSE Market Data Panel", value=st.session_state.get("show_nse_data", True), key="show_nse_data")
 
-    if st.button("💾 Save", type="primary", use_container_width=True, key="set_save"):
-        st.success("Settings saved!")
+        submitted = st.form_submit_button("💾 Save Settings")
+        if submitted:
+            st.success("Settings saved!")
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown('<div class="card-header">📋 Current Saved Settings</div>', unsafe_allow_html=True)
+    cols = st.columns(2)
+    with cols[0]:
+        st.markdown(f"**Capital (₹)**: ₹{st.session_state.get('set_capital', 1000000):,}")
+        st.markdown(f"**Lot Size**: {st.session_state.get('set_lot', 25)}")
+        st.markdown(f"**Max Daily Loss %**: {st.session_state.get('set_maxloss', 3)}%")
+    with cols[1]:
+        st.markdown(f"**Risk/Trade %**: {st.session_state.get('set_risk', 1.0)}%")
+        st.markdown(f"**Max Positions**: {st.session_state.get('set_maxpos', 2)}")
+        st.markdown(f"**SI Interval**: {st.session_state.get('set_si_interval', 5)} min")
+        st.markdown(f"**SI Changes/Day**: {st.session_state.get('set_si_changes', 3)}")
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown('<div class="card">', unsafe_allow_html=True)
@@ -1459,122 +1586,105 @@ def tab_settings():
     st.info("💡 Connect to Fyers/Zerodha/Angel One for 180+ F&O symbols.")
     st.markdown('</div>', unsafe_allow_html=True)
 
+
+# ═══════════════════════════════════════════════════════════
+# FYERS LIVE TRADE TAB
+# ═══════════════════════════════════════════════════════════
+def tab_fyers_live():
+    st.subheader("Fyers API - Live Trading")
+    if "fyers_connected" not in st.session_state:
+        st.session_state.fyers_connected = False
+    if "fyers_app_id" not in st.session_state:
+        st.session_state.fyers_app_id = ""
+    with st.expander("Step 1: App Credentials", expanded=not st.session_state.fyers_connected):
+        c1, c2 = st.columns(2)
+        with c1:
+            aid = st.text_input("App ID", value=st.session_state.fyers_app_id, key="fi_aid")
+        with c2:
+            sec = st.text_input("Secret Key", value=st.session_state.get("fyers_secret", ""), type="password", key="fi_sec")
+        if st.button("Save Credentials", key="fi_save"):
+            if aid and sec:
+                r = _safe_post("/api/fyers/configure", {"app_id": aid, "secret_key": sec})
+                if r and r.get("status") == "ok":
+                    st.session_state.fyers_app_id = aid
+                    st.session_state.fyers_secret = sec
+                    st.success("Credentials saved!")
+                else:
+                    st.error("Failed to save")
+            else:
+                st.warning("Enter both fields")
+    if st.session_state.fyers_app_id:
+        with st.expander("Step 2: Authorize & Get Token"):
+            if st.button("Generate Auth URL", key="fi_url"):
+                r = _safe_get("/api/fyers/auth-url")
+                if r and r.get("status") == "ok":
+                    url = r.get("auth_url", "")
+                    st.markdown(f"**[Click to Authorize]({url})**")
+                    st.code(url)
+                else:
+                    st.error("Could not generate auth URL")
+            acode = st.text_input("Paste auth_code from redirect URL", key="fi_ac")
+            if st.button("Get Access Token", key="fi_tok"):
+                if acode:
+                    with st.spinner("Getting token..."):
+                        r = _safe_post("/api/fyers/token", {"auth_code": acode})
+                        if r and r.get("status") == "ok":
+                            st.session_state.fyers_connected = True
+                            st.success("Connected to Fyers!")
+                            st.rerun()
+                        else:
+                            st.error("Token exchange failed. Please verify the code and try again.")
+                else:
+                    st.warning("Paste auth_code first")
+    if st.session_state.fyers_connected:
+        st.success("Connected to Fyers (LIVE)")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            pr = _safe_get("/api/fyers/profile")
+            if pr and pr.get("status") == "ok":
+                st.metric("Account", pr.get("data",{}).get("data",{}).get("name","N/A"))
+        with c2:
+            fu = _safe_get("/api/fyers/funds")
+            if fu and fu.get("status") == "ok":
+                eq = fu.get("data",{}).get("equity",{})
+                margin = eq.get("intraday_payin", 0)
+                st.metric("Margin", f"Rs {margin:,.0f}")
+        with c3:
+            su = _safe_get("/api/fyers/summary")
+            if su and su.get("status") == "ok":
+                st.metric("Positions", su.get("data",{}).get("open_positions",0))
+        st.subheader("Fyers Positions")
+        po = _safe_get("/api/fyers/positions")
+        if po and po.get("status") == "ok":
+            nps = po.get("data",{}).get("data",{}).get("netPositions",[])
+            if nps:
+                st.dataframe(pd.DataFrame(nps), use_container_width=True)
+            else:
+                st.info("No open positions")
+        with st.expander("Recent Orders"):
+            orr = _safe_get("/api/fyers/orders")
+            if orr and orr.get("status") == "ok":
+                ob = orr.get("data",{}).get("data",{}).get("orderBook",[])
+                if ob:
+                    st.dataframe(pd.DataFrame(ob), use_container_width=True)
+                else:
+                    st.info("No orders yet")
+    else:
+        st.info("Complete Steps 1-2 to connect to Fyers for live trading.")
+
 # ═══════════════════════════════════════════════════════════
 # MAIN
 # ═══════════════════════════════════════════════════════════
-
-# ---------- Session State Initialization ----------
-def init_session_state():
-    defaults = {
-        "authenticated": False,
-        "jwt_token": None,
-        "user_id": None,
-        "si_enabled": False,
-        "si_toggled": False,
-        "mode": "PAPER",
-        "auto_strategy": False,
-        "selected_strategy": "orb",
-        "selected_symbols": ["NSE:NIFTY50-INDEX"],
-        "show_nse_data": True,
-        "bt_running": False,
-        "bt_cancelled": False,
-        "bt_strat": "orb",
-        "bt_sym": "NIFTY50",
-        "bt_days": 30,
-        "bt_mode": "synthetic",
-        "bt_source": "auto",
-        "bt_csv": "",
-        "opt_strat": "orb",
-        "opt_mode": "adaptive",
-        "opt_iters": 30,
-        "opt_days": 60,
-        "last_backtest_result": None,
-        "last_compare_result": None,
-        "last_opt_result": None,
-        "kill_confirm": False,
-        "live_broker": "Fyers",
-        "live_key": "",
-        "live_secret": "",
-        "set_capital": 1000000,
-        "set_lot": 25,
-        "set_maxloss": 3,
-        "set_risk": 1.0,
-        "set_maxpos": 2,
-        "set_si_interval": 5,
-        "set_si_changes": 3,
-        "set_telegram": False,
-        "set_telegram_token": "",
-        "set_telegram_chat": "",
-    }
-    for key, val in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = val
-
-# === AUTO-REPAIRED MISSING FUNCTIONS ===
-
-# ---------- API Helpers ----------
-def _auth_headers():
-    h = {"Content-Type": "application/json"}
-    token = st.session_state.get("jwt_token")
-    if token:
-        h["Authorization"] = f"Bearer {token}"
-    return h
-def _safe_get(endpoint: str, timeout: float = 5.0) -> Optional[Any]:
-    try:
-        resp = requests.get(f"{API_URL}{endpoint}", headers=_auth_headers(), timeout=timeout)
-        return resp.json() if resp.status_code == 200 else None
-    except Exception:
-        return None
-def _safe_post(endpoint: str, payload: dict, timeout: float = 10.0) -> Optional[Any]:
-    try:
-        resp = requests.post(f"{API_URL}{endpoint}", json=payload, headers=_auth_headers(), timeout=timeout)
-        return resp.json() if resp.status_code in (200, 201) else None
-    except Exception:
-        return None
-
-# --- Fast single-call data fetch ---
-def _fetch_dashboard():
-    try:
-        resp = requests.get(f"{API_URL}/api/dashboard", headers=_auth_headers(), timeout=5.0)
-        if resp.status_code == 200:
-            return resp.json()
-    except Exception:
-        pass
-    return {}
-def get_data():
-    raw = _fetch_dashboard()
-    portfolio = raw.get("portfolio") or {}
-    return {
-        "status": raw.get("status"),
-        "portfolio": portfolio,
-        "positions": list(raw.get("positions") or []),
-        "alerts": list(raw.get("alerts") or []),
-        "backtest_results": list(raw.get("backtest_results") or []),
-        "optimization_results": list(raw.get("optimization_results") or []),
-        "self_improvement": raw.get("self_improvement"),
-        "pnl_history": [],
-        "last_update": datetime.now(),
-        "ws_connected": raw.get("status") is not None,
-        "nse_data": None,
-    }
-# === END AUTO-REPAIR ===
-
 def main():
     init_session_state()
-    # ---------- AUTH GATE ----------
-    if not st.session_state.authenticated:
-        render_login_screen()
-        st.stop()
-    # ----------------------------
-    # Fetch data ONCE ? pass to all render functions
+    if not st.session_state.get("jwt_token"):
+        render_login()
+        return
     data = get_data()
-    # Show connectivity warning if backend is offline
-    if not data.get("ws_connected"):
-        st.warning("Backend API is offline. Start the bot or check if FastAPI is running on port 8000.")
     render_sidebar(data)
     render_status_bar(data)
 
-    tabs = st.tabs(["📊 Paper Trade", "🔴 Live Trade", "🔬 Intraday Backtest", "⚡ Optimize", "⚙️ Settings"])
+    tabs = st.tabs(["📊 Paper Trade", "🔴 Live Trade", "🔬 Intraday Backtest", "⚡ Optimize", "⚙️ Settings", "🌐 Fyers Live"])
 
     with tabs[0]:
         tab_paper_trade()
@@ -1586,6 +1696,8 @@ def main():
         tab_optimize()
     with tabs[4]:
         tab_settings()
+    with tabs[5]:
+        tab_fyers_live()
 
     st.divider()
     st.caption("NSE Options Trading Bot v3.3 | Thread-Safe Fix | Built for Indian Markets")

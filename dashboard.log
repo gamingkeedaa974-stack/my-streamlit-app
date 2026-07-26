@@ -1,0 +1,113 @@
+2026-07-26 04:16:58.525 Uvicorn server started on 0.0.0.0:8501
+
+  You can now view your Streamlit app in your browser.
+
+  Local URL: http://localhost:8501
+  Network URL: http://10.158.129.90:8501
+  External URL: http://106.192.163.127:8501
+
+Exception in callback _ProactorBasePipeTransport._call_connection_lost()
+handle: <Handle _ProactorBasePipeTransport._call_connection_lost()>
+Traceback (most recent call last):
+  File "C:\Users\Imman\AppData\Local\Python\pythoncore-3.14-64\Lib\asyncio\events.py", line 94, in _run
+    self._context.run(self._callback, *self._args)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Imman\AppData\Local\Python\pythoncore-3.14-64\Lib\asyncio\proactor_events.py", line 165, in _call_connection_lost
+    self._sock.shutdown(socket.SHUT_RDWR)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+ConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host
+2026-07-26 04:20:42.058 The widget with key "bt_days" was created with a default value but also had its value set via the Session State API.
+Stack (most recent call last):
+  File "C:\Users\Imman\AppData\Local\Python\pythoncore-3.14-64\Lib\threading.py", line 1044, in _bootstrap
+    self._bootstrap_inner()
+  File "C:\Users\Imman\AppData\Local\Python\pythoncore-3.14-64\Lib\threading.py", line 1082, in _bootstrap_inner
+    self._context.run(self.run)
+  File "C:\Users\Imman\AppData\Local\Python\pythoncore-3.14-64\Lib\threading.py", line 1024, in run
+    self._target(*self._args, **self._kwargs)
+  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\streamlit\runtime\scriptrunner\script_runner.py", line 419, in _run_script_thread
+    self._run_script(request.rerun_data)
+  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\streamlit\runtime\scriptrunner\script_runner.py", line 814, in _run_script
+    ) = exec_func_with_error_handling(code_to_exec, ctx)
+  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\streamlit\runtime\scriptrunner\exec_code.py", line 129, in exec_func_with_error_handling
+    result = func()
+  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\streamlit\runtime\scriptrunner\script_runner.py", line 789, in code_to_exec
+    exec(code, module.__dict__)  # noqa: S102
+  File "C:\Users\Imman\Kiwi_Bot_model\dashboard.py", line 1576, in <module>
+    main()
+  File "C:\Users\Imman\Kiwi_Bot_model\dashboard.py", line 1564, in main
+    tab_backtest()
+  File "C:\Users\Imman\Kiwi_Bot_model\dashboard.py", line 991, in tab_backtest
+    st.number_input("Days", 1, 120, 5, key="bt_days")
+  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\streamlit\runtime\metrics_util.py", line 698, in wrapped_func
+    result = non_optional_func(*args, **kwargs)
+  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\streamlit\elements\widgets\number_input.py", line 446, in number_input
+    return self._number_input(
+  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\streamlit\elements\widgets\number_input.py", line 491, in _number_input
+    check_widget_policies(
+  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\streamlit\elements\lib\policies.py", line 187, in check_widget_policies
+    check_session_state_rules(
+  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\streamlit\elements\lib\policies.py", line 92, in check_session_state_rules
+    _LOGGER.warning(
+2026-07-26 04:34:35.878 Uncaught app execution
+Traceback (most recent call last):
+  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\streamlit\runtime\scriptrunner\exec_code.py", line 129, in exec_func_with_error_handling
+    result = func()
+  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\streamlit\runtime\scriptrunner\script_runner.py", line 789, in code_to_exec
+    exec(code, module.__dict__)  # noqa: S102
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Imman\Kiwi_Bot_model\dashboard.py", line 1591, in <module>
+    main()
+    ~~~~^^
+  File "C:\Users\Imman\Kiwi_Bot_model\dashboard.py", line 1565, in main
+    render_login()
+    ~~~~~~~~~~~~^^
+  File "C:\Users\Imman\Kiwi_Bot_model\dashboard.py", line 278, in render_login
+    st.experimental_rerun()
+    ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'streamlit' has no attribute 'experimental_rerun'
+2026-07-26 07:46:48.193 "server.pythonVersion" is not a valid config option. If you previously had this config option set, it may have been removed.
+2026-07-26 07:54:35.495 127.0.0.1:55211 - "GET / HTTP/1.1" 304
+2026-07-26 07:54:35.883 127.0.0.1:55211 - "GET /_stcore/health HTTP/1.1" 200
+2026-07-26 07:54:35.885 127.0.0.1:52033 - "GET /_stcore/host-config HTTP/1.1" 200
+2026-07-26 07:54:36.228 127.0.0.1:53747 - "WebSocket /_stcore/stream" [accepted]
+2026-07-26 07:54:36.229 connection open
+Exception in callback _ProactorBasePipeTransport._call_connection_lost()
+handle: <Handle _ProactorBasePipeTransport._call_connection_lost()>
+Traceback (most recent call last):
+  File "C:\Users\Imman\AppData\Local\Python\pythoncore-3.14-64\Lib\asyncio\events.py", line 94, in _run
+    self._context.run(self._callback, *self._args)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Imman\AppData\Local\Python\pythoncore-3.14-64\Lib\asyncio\proactor_events.py", line 165, in _call_connection_lost
+    self._sock.shutdown(socket.SHUT_RDWR)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+ConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host
+2026-07-26 08:02:16.918 127.0.0.1:62466 - "GET / HTTP/1.1" 304
+2026-07-26 08:02:17.753 127.0.0.1:62466 - "GET /_stcore/health HTTP/1.1" 200
+2026-07-26 08:02:17.758 127.0.0.1:58243 - "GET /_stcore/host-config HTTP/1.1" 200
+2026-07-26 08:02:18.160 127.0.0.1:55654 - "WebSocket /_stcore/stream" [accepted]
+2026-07-26 08:02:18.161 connection open
+Exception in callback _ProactorBasePipeTransport._call_connection_lost()
+handle: <Handle _ProactorBasePipeTransport._call_connection_lost()>
+Traceback (most recent call last):
+  File "C:\Users\Imman\AppData\Local\Python\pythoncore-3.14-64\Lib\asyncio\events.py", line 94, in _run
+    self._context.run(self._callback, *self._args)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Imman\AppData\Local\Python\pythoncore-3.14-64\Lib\asyncio\proactor_events.py", line 165, in _call_connection_lost
+    self._sock.shutdown(socket.SHUT_RDWR)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+ConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host
+2026-07-26 08:22:19.126 127.0.0.1:60090 - "GET / HTTP/1.1" 304
+2026-07-26 08:22:19.882 127.0.0.1:60090 - "GET /_stcore/health HTTP/1.1" 200
+2026-07-26 08:22:19.961 127.0.0.1:59870 - "GET /_stcore/host-config HTTP/1.1" 200
+2026-07-26 08:22:20.450 127.0.0.1:63974 - "WebSocket /_stcore/stream" [accepted]
+2026-07-26 08:22:20.451 connection open
+2026-07-26 08:22:52.985 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.
+2026-07-26 08:24:07.839 Please replace `use_container_width` with `width`.
+
+`use_container_width` will be removed after 2025-12-31.
+
+For `use_container_width=True`, use `width='stretch'`. For `use_container_width=False`, use `width='content'`.

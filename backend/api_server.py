@@ -26,6 +26,7 @@ from backend.risk_manager import RiskManager, RiskConfig, RiskState
 from backend.audit_logger import AuditLogger
 from backend.backtest_engine import BacktestEngine, DataGenerator, SyntheticOptionsChainProvider
 from backend.paper_broker import PaperBroker
+from backend.fyers_broker import FyersBroker
 from backend.performance_monitor import PerformanceMonitor, PerformanceThresholds
 from backend.self_improvement_loop import SelfImprovementLoop, SelfImprovementConfig
 
@@ -255,18 +256,26 @@ app.add_middleware(
 # ---------- Auth Middleware ----------
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
-    exempt_paths = ["/api/login", "/", "/docs", "/openapi.json"]
-    if any(request.url.path.startswith(p) for p in exempt_paths):
+    exempt_paths = ["/api/login", "/", "/docs", "/docs/", "/redoc", "/redoc/", "/openapi.json"]
+    request_path = request.url.path
+    request.state.user_id = None
+    if request_path == "/" or request_path == "/api/login" or request_path.startswith("/docs") or request_path.startswith("/redoc") or request_path.startswith("/openapi.json"):
         return await call_next(request)
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
         return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
-    token = auth_header.split(" ")[1]
+    token = auth_header.split(" ", 1)[1].strip()
     user_id = auth_manager.verify_token(token)
     if not user_id:
         return JSONResponse(status_code=401, content={"detail": "Invalid or expired token"})
     request.state.user_id = user_id
     return await call_next(request)
+
+def require_user_id(request: Request) -> str:
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return user_id
 # ---------- Auth Routes ----------
 from pydantic import BaseModel
 
@@ -291,7 +300,7 @@ async def login(req: LoginRequest = Body(...)):
 
 @app.get("/api/status")
 async def get_status(request: Request):
-    session = await session_manager.get_session(request.state.user_id)
+    session = await session_manager.get_session(require_user_id(request))
     return {
         "running": session.bot_running,
         "mode": "PAPER",
@@ -301,27 +310,49 @@ async def get_status(request: Request):
     }
 @app.get("/api/portfolio")
 async def get_portfolio(request: Request):
-    session = await session_manager.get_session(request.state.user_id)
+    session = await session_manager.get_session(require_user_id(request))
     return session.paper_broker.get_portfolio_summary()
 @app.get("/api/positions")
 async def get_positions(request: Request):
-    session = await session_manager.get_session(request.state.user_id)
+    session = await session_manager.get_session(require_user_id(request))
     return session.paper_broker.get_positions()
 @app.get("/api/alerts")
 async def get_alerts(request: Request, limit: int = 50):
-    session = await session_manager.get_session(request.state.user_id)
+    session = await session_manager.get_session(require_user_id(request))
     return session.alerts[-limit:]
 @app.get("/api/backtest-results")
 async def get_backtest_results(request: Request):
-    session = await session_manager.get_session(request.state.user_id)
+    session = await session_manager.get_session(require_user_id(request))
     return session.backtest_results[-50:]
 @app.get("/api/optimization-results")
 async def get_optimization_results(request: Request):
-    session = await session_manager.get_session(request.state.user_id)
+    session = await session_manager.get_session(require_user_id(request))
     return session.optimization_results[-50:]
+
+@app.get("/api/dashboard")
+async def get_dashboard(request: Request):
+    session = await session_manager.get_session(require_user_id(request))
+    status = {
+        "running": session.bot_running,
+        "mode": "PAPER",
+        "strategy": session.current_strategy or "none",
+        "connected_to_broker": False,
+        "market_regime": getattr(session.strategy_instance, '_current_regime', None).value if session.strategy_instance else None,
+    }
+    return {
+        "status": status,
+        "portfolio": session.paper_broker.get_portfolio_summary(),
+        "positions": session.paper_broker.get_positions(),
+        "alerts": session.alerts[-50:],
+        "backtest_results": session.backtest_results[-50:],
+        "optimization_results": session.optimization_results[-50:],
+        "self_improvement": None,
+        "nse_data": None,
+    }
+
 @app.post("/api/control")
 async def control_bot(request: Request, control: StrategyControl):
-    session = await session_manager.get_session(request.state.user_id)
+    session = await session_manager.get_session(require_user_id(request))
     if control.action == "START":
         if session.bot_running:
             return {"status": "already_running"}
@@ -356,179 +387,194 @@ async def control_bot(request: Request, control: StrategyControl):
     raise HTTPException(400, f"Unknown action: {control.action}")
 @app.post("/api/backtest")
 async def run_backtest(request: Request, req: BacktestRequest):
-    session = await session_manager.get_session(request.state.user_id)
-    from backend.strategies.strategy import StrategyRegistry
-    from backend.backtest_engine import BacktestEngine, DataGenerator
-    from backend.risk_manager import RiskConfig
-    import math
-    data = DataGenerator.generate_synthetic_data(days=req.days, symbol=req.symbol, seed=None)
-    strategy_cls = StrategyRegistry.get(req.strategy)
-    config_cls = StrategyRegistry.get_config_class(req.strategy)
-    config = config_cls(name=req.strategy)
-    strategy = strategy_cls(config)
-    strategy.reset()
-    bt_risk_config = RiskConfig(theta_cutoff_time=time(15, 0))
-    engine = BacktestEngine(strategy, bt_risk_config, data, symbol=req.symbol)
-    result = await engine.run()
-    ohlc_data = [{
-        "timestamp": idx.isoformat() if hasattr(idx, 'isoformat') else str(idx),
-        "open": float(row["open"]), "high": float(row["high"]), "low": float(row["low"]), "close": float(row["close"]),
-        "volume": int(row["volume"]) if not math.isnan(float(row["volume"])) else 0
-    } for idx, row in data.iterrows()]
-    result_data = {
-        "strategy": req.strategy, "symbol": req.symbol,
-        "total_pnl": result.total_pnl, "total_pnl_pct": result.total_pnl_pct,
-        "win_rate": result.win_rate, "sharpe_ratio": result.sharpe_ratio,
-        "max_drawdown": result.max_drawdown, "total_trades": result.total_trades,
-        "profit_factor": 999.99 if result.profit_factor == float("inf") else result.profit_factor,
-        "avg_trade_pnl": result.avg_profit_per_trade, "max_consecutive_losses": result.max_consecutive_losses,
-        "params": result.params, "equity_curve": [e["equity"] for e in result.equity_curve],
-        "trades": result.trades, "ohlc_data": ohlc_data, "timestamp": datetime.now().isoformat()
-    }
-    session.backtest_results.append(result_data)
-    return result_data
-@app.post("/api/backtest/compare")
-async def run_backtest_compare(request: Request, req: StrategyCompareRequest):
-    """Run all strategies on the SAME synthetic data and return comparison."""
-    from backend.strategies.strategy import StrategyRegistry
-    from backend.backtest_engine import BacktestEngine, DataGenerator
-    from backend.risk_manager import RiskConfig
-    import math
+    try:
+        session = await session_manager.get_session(require_user_id(request))
+        from backend.strategies.strategy import StrategyRegistry
+        from backend.backtest_engine import BacktestEngine, DataGenerator
+        from backend.risk_manager import RiskConfig
+        import math
 
-    # Generate data ONCE so all strategies use identical data
-    np_seed = int(datetime.now().timestamp()) % (2**32)
-    data = DataGenerator.generate_synthetic_data(days=req.days, symbol=req.symbol, seed=np_seed)
-    ohlc_data = [{
-        "timestamp": idx.isoformat() if hasattr(idx, 'isoformat') else str(idx),
-        "open": float(row["open"]), "high": float(row["high"]), "low": float(row["low"]), "close": float(row["close"]),
-        "volume": int(row["volume"]) if not math.isnan(float(row["volume"])) else 0
-    } for idx, row in data.iterrows()]
-
-    comparisons = []
-    best_score = -999
-    winner = "orb"
-
-    for strat_name in StrategyRegistry.list_strategies():
-        try:
-            strategy_cls = StrategyRegistry.get(strat_name)
-            config_cls = StrategyRegistry.get_config_class(strat_name)
-            config = config_cls(name=strat_name)
-            strategy = strategy_cls(config)
-            strategy.reset()
-
-            bt_risk_config = RiskConfig(theta_cutoff_time=time(15, 0))
-            engine = BacktestEngine(strategy, bt_risk_config, data, symbol=req.symbol)
-            result = await engine.run()
-
-            score_val = result.score() if hasattr(result, 'score') else result.total_pnl_pct
-
-            comp = {
-                "strategy": strat_name,
-                "total_pnl_pct": result.total_pnl_pct,
-                "win_rate": result.win_rate,
-                "sharpe_ratio": result.sharpe_ratio,
-                "max_drawdown": result.max_drawdown,
-                "total_trades": result.total_trades,
-                "profit_factor": 999.99 if result.profit_factor == float("inf") else result.profit_factor,
-                "avg_trade_pnl": result.avg_profit_per_trade,
-                "score": score_val,
-                "ohlc_data": ohlc_data,
-                "trades": result.trades,
-            }
-            comparisons.append(comp)
-
-            if score_val > best_score:
-                best_score = score_val
-                winner = strat_name
-
-            print(f"[COMPARE] {strat_name}: score={score_val:.2f}, trades={result.total_trades}, pnl%={result.total_pnl_pct:.2f}")
-        except Exception as e:
-            print(f"[COMPARE] {strat_name} failed: {e}")
-            comparisons.append({
-                "strategy": strat_name, "total_pnl_pct": 0, "win_rate": 0,
-                "sharpe_ratio": 0, "max_drawdown": 0, "total_trades": 0,
-                "profit_factor": 0, "avg_trade_pnl": 0, "score": -999,
-                "ohlc_data": [], "trades": [],
-            })
-
-    result_data = {
-        "comparisons": comparisons,
-        "winner": winner,
-        "symbol": req.symbol,
-        "timestamp": datetime.now().isoformat(),
-    }
-    session = await session_manager.get_session(request.state.user_id)
-    session.backtest_results.append(result_data)
-    return result_data
-
+        data = DataGenerator.generate_synthetic_data(days=req.days, symbol=req.symbol, seed=None)
+        strategy_cls = StrategyRegistry.get(req.strategy)
+        config_cls = StrategyRegistry.get_config_class(req.strategy)
+        config = config_cls(name=req.strategy)
+        strategy = strategy_cls(config)
+        strategy.reset()
+        bt_risk_config = RiskConfig(theta_cutoff_time=time(15, 0))
+        engine = BacktestEngine(strategy, bt_risk_config, data, symbol=req.symbol)
+        result = await engine.run()
+        ohlc_data = [{
+            "timestamp": idx.isoformat() if hasattr(idx, 'isoformat') else str(idx),
+            "open": float(row["open"]), "high": float(row["high"]), "low": float(row["low"]), "close": float(row["close"]),
+            "volume": int(row["volume"]) if not math.isnan(float(row["volume"])) else 0
+        } for idx, row in data.iterrows()]
+        result_data = {
+            "strategy": req.strategy, "symbol": req.symbol,
+            "total_pnl": result.total_pnl, "total_pnl_pct": result.total_pnl_pct,
+            "win_rate": result.win_rate, "sharpe_ratio": result.sharpe_ratio,
+            "max_drawdown": result.max_drawdown, "total_trades": result.total_trades,
+            "profit_factor": 999.99 if result.profit_factor == float("inf") else result.profit_factor,
+            "avg_trade_pnl": result.avg_profit_per_trade, "max_consecutive_losses": result.max_consecutive_losses,
+            "params": result.params, "equity_curve": [e["equity"] for e in result.equity_curve],
+            "trades": result.trades, "ohlc_data": ohlc_data, "timestamp": datetime.now().isoformat()
+        }
+        session.backtest_results.append(result_data)
+        return result_data
+    except Exception:
+        return JSONResponse(status_code=500, content={"detail": "Backtest failed"})
 
 @app.post("/api/backtest/compare")
 async def run_backtest_compare(request: Request, req: StrategyCompareRequest):
     """Run all strategies on the SAME synthetic data and return comparison."""
-    from backend.strategies.strategy import StrategyRegistry
-    from backend.backtest_engine import BacktestEngine, DataGenerator
-    from backend.risk_manager import RiskConfig
-    import math
+    try:
+        from backend.strategies.strategy import StrategyRegistry
+        from backend.backtest_engine import BacktestEngine, DataGenerator
+        from backend.risk_manager import RiskConfig
+        import math
 
-    np_seed = int(datetime.now().timestamp()) % (2**32)
-    data = DataGenerator.generate_synthetic_data(days=req.days, symbol=req.symbol, seed=np_seed)
-    ohlc_data = [{
-        "timestamp": idx.isoformat() if hasattr(idx, 'isoformat') else str(idx),
-        "open": float(row["open"]), "high": float(row["high"]), "low": float(row["low"]), "close": float(row["close"]),
-        "volume": int(row["volume"]) if not math.isnan(float(row["volume"])) else 0
-    } for idx, row in data.iterrows()]
+        # Generate data ONCE so all strategies use identical data
+        np_seed = int(datetime.now().timestamp()) % (2**32)
+        data = DataGenerator.generate_synthetic_data(days=req.days, symbol=req.symbol, seed=np_seed)
+        ohlc_data = [{
+            "timestamp": idx.isoformat() if hasattr(idx, 'isoformat') else str(idx),
+            "open": float(row["open"]), "high": float(row["high"]), "low": float(row["low"]), "close": float(row["close"]),
+            "volume": int(row["volume"]) if not math.isnan(float(row["volume"])) else 0
+        } for idx, row in data.iterrows()]
 
-    comparisons = []
-    best_score = -999
-    winner = "orb"
+        comparisons = []
+        best_score = -999
+        winner = "orb"
 
-    for strat_name in StrategyRegistry.list_strategies():
-        try:
-            strategy_cls = StrategyRegistry.get(strat_name)
-            config_cls = StrategyRegistry.get_config_class(strat_name)
-            config = config_cls(name=strat_name)
-            strategy = strategy_cls(config)
-            strategy.reset()
-            bt_risk_config = RiskConfig(theta_cutoff_time=time(15, 0))
-            engine = BacktestEngine(strategy, bt_risk_config, data, symbol=req.symbol)
-            result = await engine.run()
-            score_val = result.score() if hasattr(result, 'score') else result.total_pnl_pct
-            comp = {
-                "strategy": strat_name,
-                "total_pnl_pct": result.total_pnl_pct,
-                "win_rate": result.win_rate,
-                "sharpe_ratio": result.sharpe_ratio,
-                "max_drawdown": result.max_drawdown,
-                "total_trades": result.total_trades,
-                "profit_factor": 999.99 if result.profit_factor == float("inf") else result.profit_factor,
-                "avg_trade_pnl": result.avg_profit_per_trade,
-                "score": score_val,
-                "ohlc_data": ohlc_data,
-                "trades": result.trades,
-            }
-            comparisons.append(comp)
-            if score_val > best_score:
-                best_score = score_val
-                winner = strat_name
-            print(f"[COMPARE] {strat_name}: score={score_val:.2f}, trades={result.total_trades}, pnl%={result.total_pnl_pct:.2f}")
-        except Exception as e:
-            print(f"[COMPARE] {strat_name} failed: {e}")
-            comparisons.append({
-                "strategy": strat_name, "total_pnl_pct": 0, "win_rate": 0,
-                "sharpe_ratio": 0, "max_drawdown": 0, "total_trades": 0,
-                "profit_factor": 0, "avg_trade_pnl": 0, "score": -999,
-                "ohlc_data": [], "trades": [],
-            })
+        for strat_name in StrategyRegistry.list_strategies():
+            try:
+                strategy_cls = StrategyRegistry.get(strat_name)
+                config_cls = StrategyRegistry.get_config_class(strat_name)
+                config = config_cls(name=strat_name)
+                strategy = strategy_cls(config)
+                strategy.reset()
 
-    result_data = {
-        "comparisons": comparisons,
-        "winner": winner,
-        "symbol": req.symbol,
-        "timestamp": datetime.now().isoformat(),
-    }
-    session = await session_manager.get_session(request.state.user_id)
-    session.backtest_results.append(result_data)
-    return result_data
+                bt_risk_config = RiskConfig(theta_cutoff_time=time(15, 0))
+                engine = BacktestEngine(strategy, bt_risk_config, data, symbol=req.symbol)
+                result = await engine.run()
+
+                score_val = result.score() if hasattr(result, 'score') else result.total_pnl_pct
+
+                comp = {
+                    "strategy": strat_name,
+                    "total_pnl_pct": result.total_pnl_pct,
+                    "win_rate": result.win_rate,
+                    "sharpe_ratio": result.sharpe_ratio,
+                    "max_drawdown": result.max_drawdown,
+                    "total_trades": result.total_trades,
+                    "profit_factor": 999.99 if result.profit_factor == float("inf") else result.profit_factor,
+                    "avg_trade_pnl": result.avg_profit_per_trade,
+                    "score": score_val,
+                    "ohlc_data": ohlc_data,
+                    "trades": result.trades,
+                }
+                comparisons.append(comp)
+
+                if score_val > best_score:
+                    best_score = score_val
+                    winner = strat_name
+
+                print(f"[COMPARE] {strat_name}: score={score_val:.2f}, trades={result.total_trades}, pnl%={result.total_pnl_pct:.2f}")
+            except Exception as e:
+                print(f"[COMPARE] {strat_name} failed: {e}")
+                comparisons.append({
+                    "strategy": strat_name, "total_pnl_pct": 0, "win_rate": 0,
+                    "sharpe_ratio": 0, "max_drawdown": 0, "total_trades": 0,
+                    "profit_factor": 0, "avg_trade_pnl": 0, "score": -999,
+                    "ohlc_data": [], "trades": [],
+                })
+
+        result_data = {
+            "comparisons": comparisons,
+            "winner": winner,
+            "symbol": req.symbol,
+            "timestamp": datetime.now().isoformat(),
+        }
+        session = await session_manager.get_session(require_user_id(request))
+        session.backtest_results.append(result_data)
+        return result_data
+    except Exception:
+        return JSONResponse(status_code=500, content={"detail": "Backtest compare failed"})
+
+
+# ---------- Fyers API Endpoints ----------
+@app.get("/api/fyers/status")
+async def fyers_status(request: Request):
+    session = await session_manager.get_session(require_user_id(request))
+    if not hasattr(session, '_fyers_broker') or session._fyers_broker is None:
+        from backend.fyers_broker import FyersBroker
+        session._fyers_broker = FyersBroker()
+    return session._fyers_broker.get_connection_status()
+
+@app.post("/api/fyers/save-creds")
+async def fyers_save_creds(request: Request):
+    body = await request.json()
+    from backend.fyers_broker import FyersBroker
+    app_id = body.get("app_id", "")
+    secret_key = body.get("secret_key", "")
+    redirect_uri = body.get("redirect_uri", "http://localhost:8501")
+    session = await session_manager.get_session(require_user_id(request))
+    session._fyers_broker = FyersBroker(app_id=app_id, secret_key=secret_key, redirect_uri=redirect_uri)
+    return {"status": "saved", "has_app_id": bool(app_id)}
+
+@app.post("/api/fyers/auth-url")
+async def fyers_auth_url(request: Request):
+    session = await session_manager.get_session(require_user_id(request))
+    if not hasattr(session, '_fyers_broker') or session._fyers_broker is None:
+        from backend.fyers_broker import FyersBroker
+        session._fyers_broker = FyersBroker()
+    url = session._fyers_broker.generate_auth_url()
+    if url:
+        return {"auth_url": url}
+    return JSONResponse(status_code=400, content={"error": session._fyers_broker.last_error})
+
+@app.post("/api/fyers/auth-token")
+async def fyers_auth_token(request: Request):
+    body = await request.json()
+    auth_code = body.get("auth_code", "")
+    session = await session_manager.get_session(require_user_id(request))
+    if not hasattr(session, '_fyers_broker') or session._fyers_broker is None:
+        from backend.fyers_broker import FyersBroker
+        session._fyers_broker = FyersBroker()
+    result = await session._fyers_broker.exchange_auth_code(auth_code)
+    if not result["success"]:
+        return JSONResponse(status_code=400, content=result)
+    return result
+
+@app.post("/api/fyers/refresh-token")
+async def fyers_refresh_token(request: Request):
+    session = await session_manager.get_session(require_user_id(request))
+    if not hasattr(session, '_fyers_broker') or session._fyers_broker is None:
+        from backend.fyers_broker import FyersBroker
+        session._fyers_broker = FyersBroker()
+    result = await session._fyers_broker.refresh_access_token()
+    if not result["success"]:
+        return JSONResponse(status_code=400, content=result)
+    return result
+
+@app.post("/api/fyers/test")
+async def fyers_test(request: Request):
+    session = await session_manager.get_session(require_user_id(request))
+    if not hasattr(session, '_fyers_broker') or session._fyers_broker is None:
+        from backend.fyers_broker import FyersBroker
+        session._fyers_broker = FyersBroker()
+    broker = session._fyers_broker
+    if not broker.is_connected:
+        # Try refresh first
+        if broker.config.refresh_token:
+            refresh_result = await broker.refresh_access_token()
+            if not refresh_result["success"]:
+                return JSONResponse(status_code=400, content={"error": broker.last_error, "refresh_result": refresh_result})
+        else:
+            return JSONResponse(status_code=400, content={"error": broker.last_error})
+    profile = broker.get_profile()
+    if profile:
+        return {"status": "connected", "profile": profile.get("data", {})}
+    return JSONResponse(status_code=400, content={"error": "Connected but profile fetch failed"})
 # ---------- WebSocket ----------
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -547,4 +593,5 @@ if __name__ == "__main__":
     parser.add_argument("--no-reload", action="store_true")
     args = parser.parse_args()
     uvicorn.run("backend.api_server:app", host=args.host, port=args.port, reload=not args.no_reload)
+
 
