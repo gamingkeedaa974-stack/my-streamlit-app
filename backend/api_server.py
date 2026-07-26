@@ -11,6 +11,7 @@ from datetime import datetime, time, timedelta
 from typing import Optional, Dict, List
 from contextlib import asynccontextmanager
 from pathlib import Path
+import os
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
@@ -507,16 +508,21 @@ async def fyers_status(request: Request):
     session = await session_manager.get_session(require_user_id(request))
     if not hasattr(session, '_fyers_broker') or session._fyers_broker is None:
         from backend.fyers_broker import FyersBroker
-        session._fyers_broker = FyersBroker()
+        session._fyers_broker = FyersBroker(
+            app_id=os.environ.get("FYERS_API_KEY"),
+            secret_key=os.environ.get("FYERS_SECRET"),
+            redirect_uri=os.environ.get("FYERS_REDIRECT_URI", "http://localhost:8501"),
+        )
     return session._fyers_broker.get_connection_status()
 
 @app.post("/api/fyers/save-creds")
 async def fyers_save_creds(request: Request):
     body = await request.json()
     from backend.fyers_broker import FyersBroker
-    app_id = body.get("app_id", "")
-    secret_key = body.get("secret_key", "")
-    redirect_uri = body.get("redirect_uri", "http://localhost:8501")
+    # Prefer explicit request body values; fall back to environment variables when present.
+    app_id = body.get("app_id") or os.environ.get("FYERS_API_KEY")
+    secret_key = body.get("secret_key") or os.environ.get("FYERS_SECRET")
+    redirect_uri = body.get("redirect_uri") or os.environ.get("FYERS_REDIRECT_URI") or "http://localhost:8501"
     session = await session_manager.get_session(require_user_id(request))
     session._fyers_broker = FyersBroker(app_id=app_id, secret_key=secret_key, redirect_uri=redirect_uri)
     return {"status": "saved", "has_app_id": bool(app_id)}
@@ -526,7 +532,11 @@ async def fyers_auth_url(request: Request):
     session = await session_manager.get_session(require_user_id(request))
     if not hasattr(session, '_fyers_broker') or session._fyers_broker is None:
         from backend.fyers_broker import FyersBroker
-        session._fyers_broker = FyersBroker()
+        session._fyers_broker = FyersBroker(
+            app_id=os.environ.get("FYERS_API_KEY"),
+            secret_key=os.environ.get("FYERS_SECRET"),
+            redirect_uri=os.environ.get("FYERS_REDIRECT_URI", "http://localhost:8501"),
+        )
     url = session._fyers_broker.generate_auth_url()
     if url:
         return {"auth_url": url}
@@ -539,7 +549,11 @@ async def fyers_auth_token(request: Request):
     session = await session_manager.get_session(require_user_id(request))
     if not hasattr(session, '_fyers_broker') or session._fyers_broker is None:
         from backend.fyers_broker import FyersBroker
-        session._fyers_broker = FyersBroker()
+        session._fyers_broker = FyersBroker(
+            app_id=os.environ.get("FYERS_API_KEY"),
+            secret_key=os.environ.get("FYERS_SECRET"),
+            redirect_uri=os.environ.get("FYERS_REDIRECT_URI", "http://localhost:8501"),
+        )
     result = await session._fyers_broker.exchange_auth_code(auth_code)
     if not result["success"]:
         return JSONResponse(status_code=400, content=result)
@@ -550,7 +564,11 @@ async def fyers_refresh_token(request: Request):
     session = await session_manager.get_session(require_user_id(request))
     if not hasattr(session, '_fyers_broker') or session._fyers_broker is None:
         from backend.fyers_broker import FyersBroker
-        session._fyers_broker = FyersBroker()
+        session._fyers_broker = FyersBroker(
+            app_id=os.environ.get("FYERS_API_KEY"),
+            secret_key=os.environ.get("FYERS_SECRET"),
+            redirect_uri=os.environ.get("FYERS_REDIRECT_URI", "http://localhost:8501"),
+        )
     result = await session._fyers_broker.refresh_access_token()
     if not result["success"]:
         return JSONResponse(status_code=400, content=result)
@@ -561,7 +579,11 @@ async def fyers_test(request: Request):
     session = await session_manager.get_session(require_user_id(request))
     if not hasattr(session, '_fyers_broker') or session._fyers_broker is None:
         from backend.fyers_broker import FyersBroker
-        session._fyers_broker = FyersBroker()
+        session._fyers_broker = FyersBroker(
+            app_id=os.environ.get("FYERS_API_KEY"),
+            secret_key=os.environ.get("FYERS_SECRET"),
+            redirect_uri=os.environ.get("FYERS_REDIRECT_URI", "http://localhost:8501"),
+        )
     broker = session._fyers_broker
     if not broker.is_connected:
         # Try refresh first

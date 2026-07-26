@@ -1,28 +1,4 @@
-INFO:     Started server process [13508]
+INFO:     Started server process [23788]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-Trading API Server starting...
-INFO:     127.0.0.1:51468 - "POST /api/login HTTP/1.1" 200 OK
-INFO:     127.0.0.1:51469 - "GET /api/status HTTP/1.1" 200 OK
-INFO:     127.0.0.1:51470 - "POST /api/login HTTP/1.1" 200 OK
-[BACKTEST] Complete: 0 signals, 0 trades executed, 0 total trades
-INFO:     127.0.0.1:51471 - "POST /api/backtest HTTP/1.1" 200 OK
-INFO:     127.0.0.1:51478 - "POST /api/login HTTP/1.1" 200 OK
-INFO:     127.0.0.1:51480 - "GET /api/dashboard HTTP/1.1" 200 OK
-INFO:     127.0.0.1:57326 - "GET /api/dashboard HTTP/1.1" 200 OK
-[BACKTEST] Signal 1: BUY_CE at 2024-01-01 10:50:00 — conf: 0.77
-[BACKTEST] Signal 2: EXIT at 2024-01-01 12:20:00 — conf: 0.80
-[BACKTEST] Signal 3: BUY_PE at 2024-01-08 12:10:00 — conf: 0.82
-[BACKTEST] Signal 4: BUY_PE at 2024-01-09 12:20:00 — conf: 0.70
-[BACKTEST] Signal 5: EXIT at 2024-01-09 12:25:00 — conf: 0.80
-[BACKTEST] Signal 6: BUY_PE at 2024-01-11 12:50:00 — conf: 0.85
-[BACKTEST] Signal 7: BUY_CE at 2024-01-12 11:30:00 — conf: 0.73
-[BACKTEST] Signal 8: EXIT at 2024-01-12 11:35:00 — conf: 0.80
-[BACKTEST] Signal 9: BUY_PE at 2024-01-16 11:40:00 — conf: 0.74
-[BACKTEST] Signal 10: BUY_CE at 2024-01-18 11:05:00 — conf: 0.86
-[BACKTEST] Signal 11: EXIT at 2024-01-18 11:15:00 — conf: 0.80
-[BACKTEST] Signal 12: BUY_CE at 2024-01-24 11:50:00 — conf: 0.69
-[BACKTEST] Complete: 12 signals, 0 trades executed, 0 total trades
-INFO:     127.0.0.1:57330 - "POST /api/backtest HTTP/1.1" 200 OK
-INFO:     127.0.0.1:62488 - "GET /api/dashboard HTTP/1.1" 200 OK
