@@ -16,3 +16,4 @@ nsepython==2.0
 
 # Development
 pytest==8.2.0
+plotly==5.16.0
