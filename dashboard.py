@@ -1604,21 +1604,21 @@ def tab_fyers_live():
             sec = st.text_input("Secret Key", value=st.session_state.get("fyers_secret", ""), type="password", key="fi_sec")
         if st.button("Save Credentials", key="fi_save"):
             if aid and sec:
-                r = _safe_post("/api/fyers/configure", {"app_id": aid, "secret_key": sec})
-                if r and r.get("status") == "ok":
+                r = _safe_post("/api/fyers/save-creds", {"app_id": aid, "secret_key": sec, "redirect_uri": st.session_state.get('fyers_redirect', '') or None})
+                if r and r.get("status") in ("saved", True):
                     st.session_state.fyers_app_id = aid
                     st.session_state.fyers_secret = sec
                     st.success("Credentials saved!")
                 else:
-                    st.error("Failed to save")
+                    st.error("Failed to save credentials. Try again.")
             else:
                 st.warning("Enter both fields")
     if st.session_state.fyers_app_id:
         with st.expander("Step 2: Authorize & Get Token"):
             if st.button("Generate Auth URL", key="fi_url"):
                 r = _safe_get("/api/fyers/auth-url")
-                if r and r.get("status") == "ok":
-                    url = r.get("auth_url", "")
+                if r and isinstance(r, dict) and r.get("auth_url"):
+                    url = r.get("auth_url")
                     st.markdown(f"**[Click to Authorize]({url})**")
                     st.code(url)
                 else:
@@ -1627,48 +1627,43 @@ def tab_fyers_live():
             if st.button("Get Access Token", key="fi_tok"):
                 if acode:
                     with st.spinner("Getting token..."):
-                        r = _safe_post("/api/fyers/token", {"auth_code": acode})
-                        if r and r.get("status") == "ok":
+                        r = _safe_post("/api/fyers/auth-token", {"auth_code": acode})
+                        if r and isinstance(r, dict) and r.get("success"):
                             st.session_state.fyers_connected = True
                             st.success("Connected to Fyers!")
-                            st.rerun()
+                            st.experimental_rerun()
                         else:
                             st.error("Token exchange failed. Please verify the code and try again.")
                 else:
                     st.warning("Paste auth_code first")
     if st.session_state.fyers_connected:
         st.success("Connected to Fyers (LIVE)")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            pr = _safe_get("/api/fyers/profile")
-            if pr and pr.get("status") == "ok":
-                st.metric("Account", pr.get("data",{}).get("data",{}).get("name","N/A"))
-        with c2:
-            fu = _safe_get("/api/fyers/funds")
-            if fu and fu.get("status") == "ok":
-                eq = fu.get("data",{}).get("equity",{})
-                margin = eq.get("intraday_payin", 0)
-                st.metric("Margin", f"Rs {margin:,.0f}")
-        with c3:
-            su = _safe_get("/api/fyers/summary")
-            if su and su.get("status") == "ok":
-                st.metric("Positions", su.get("data",{}).get("open_positions",0))
+        # Use test endpoint to fetch profile & basic info
+        with st.spinner("Fetching account info..."):
+            test = _safe_post("/api/fyers/test", {})
+        if isinstance(test, dict) and test.get("status") == "connected":
+            profile = test.get("profile") or test.get("profile", {})
+            data = profile.get("data", {}) if isinstance(profile, dict) else {}
+            name = data.get("name") if isinstance(data, dict) else None
+            cols = st.columns(3)
+            with cols[0]:
+                st.metric("Account", name or "N/A")
+            with cols[1]:
+                st.metric("Status", "Connected")
+            with cols[2]:
+                st.metric("Positions", test.get("profile", {}).get("open_positions", 0) if isinstance(test.get("profile", {}), dict) else 0)
+        else:
+            st.warning("Connected but couldn't fetch account summary")
         st.subheader("Fyers Positions")
-        po = _safe_get("/api/fyers/positions")
-        if po and po.get("status") == "ok":
-            nps = po.get("data",{}).get("data",{}).get("netPositions",[])
-            if nps:
-                st.dataframe(pd.DataFrame(nps), use_container_width=True)
-            else:
-                st.info("No open positions")
-        with st.expander("Recent Orders"):
-            orr = _safe_get("/api/fyers/orders")
-            if orr and orr.get("status") == "ok":
-                ob = orr.get("data",{}).get("data",{}).get("orderBook",[])
-                if ob:
-                    st.dataframe(pd.DataFrame(ob), use_container_width=True)
-                else:
-                    st.info("No orders yet")
+        # positions and orders may not be available via current backend; show test payload if present
+        pos_data = test.get("profile", {}).get("positions") if isinstance(test, dict) else None
+        if pos_data:
+            try:
+                st.dataframe(pd.DataFrame(pos_data), use_container_width=True)
+            except Exception:
+                st.write(pos_data)
+        else:
+            st.info("Positions not available")
     else:
         st.info("Complete Steps 1-2 to connect to Fyers for live trading.")
 

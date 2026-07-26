@@ -1,32 +1,66 @@
+Error parsing config toml. This is most likely due to a syntax error in the config.toml file. Please fix it and try again.
 Traceback (most recent call last):
-  File "<frozen runpy>", line 203, in _run_module_as_main
-  File "<frozen runpy>", line 88, in _run_code
-  File "C:\Users\Imman\Kiwi_Bot_model\venv\Scripts\streamlit.exe\__main__.py", line 5, in <module>
-    sys.exit(main())
-             ~~~~^^
-  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\click\core.py", line 1569, in __call__
-    return self.main(*args, **kwargs)
-           ~~~~~~~~~^^^^^^^^^^^^^^^^^
-  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\click\core.py", line 1490, in main
-    rv = self.invoke(ctx)
-  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\click\core.py", line 1970, in invoke
-    return _process_result(sub_ctx.command.invoke(sub_ctx))
-                           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
-  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\click\core.py", line 1353, in invoke
-    return ctx.invoke(self.callback, **ctx.params)
-           ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\click\core.py", line 907, in invoke
-    return callback(*args, **kwargs)
-  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\streamlit\web\cli.py", line 251, in main_run
-    _main_run(path_str, args, flag_options=kwargs)
-    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\streamlit\web\cli.py", line 298, in _main_run
-    bootstrap.load_config_options(flag_options=flag_options or {})
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\streamlit\web\bootstrap.py", line 294, in load_config_options
-    config.get_config_options(force_reparse=True, options_from_flags=options_from_flags)
-    ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\streamlit\config.py", line 2805, in get_config_options
-    file_contents = file.read()
-  File "<frozen codecs>", line 325, in decode
-UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte
+  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\streamlit\config.py", line 2606, in _update_config_with_toml
+    parsed_config_file = toml.loads(raw_toml)
+  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\toml\decoder.py", line 260, in loads
+    raise TomlDecodeError("Found invalid character in key name: '" +
+                          item + "'. Try quoting the key name.",
+                          original, i)
+toml.decoder.TomlDecodeError: Found invalid character in key name: '['. Try quoting the key name. (line 1 column 2 char 1)
+2026-07-26 13:47:00.946 Uvicorn server started on 0.0.0.0:8501
+
+  You can now view your Streamlit app in your browser.
+
+  Local URL: http://localhost:8501
+  Network URL: http://10.158.129.90:8501
+  External URL: http://106.192.162.50:8501
+
+2026-07-26 13:59:29.720 Error parsing config toml. This is most likely due to a syntax error in the config.toml file. Please fix it and try again.
+Traceback (most recent call last):
+  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\streamlit\config.py", line 2606, in _update_config_with_toml
+    parsed_config_file = toml.loads(raw_toml)
+  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\toml\decoder.py", line 260, in loads
+    raise TomlDecodeError("Found invalid character in key name: '" +
+                          item + "'. Try quoting the key name.",
+                          original, i)
+toml.decoder.TomlDecodeError: Found invalid character in key name: '['. Try quoting the key name. (line 1 column 2 char 1)
+2026-07-26 14:00:35.385 Error parsing config toml. This is most likely due to a syntax error in the config.toml file. Please fix it and try again.
+Traceback (most recent call last):
+  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\streamlit\config.py", line 2606, in _update_config_with_toml
+    parsed_config_file = toml.loads(raw_toml)
+  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\toml\decoder.py", line 260, in loads
+    raise TomlDecodeError("Found invalid character in key name: '" +
+                          item + "'. Try quoting the key name.",
+                          original, i)
+toml.decoder.TomlDecodeError: Found invalid character in key name: '['. Try quoting the key name. (line 1 column 2 char 1)
+2026-07-26 14:00:35.386 Error parsing config toml. This is most likely due to a syntax error in the config.toml file. Please fix it and try again.
+Traceback (most recent call last):
+  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\streamlit\config.py", line 2606, in _update_config_with_toml
+    parsed_config_file = toml.loads(raw_toml)
+  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\toml\decoder.py", line 260, in loads
+    raise TomlDecodeError("Found invalid character in key name: '" +
+                          item + "'. Try quoting the key name.",
+                          original, i)
+toml.decoder.TomlDecodeError: Found invalid character in key name: '['. Try quoting the key name. (line 1 column 2 char 1)
+2026-07-26 14:01:24.240 "server.pythonVersion" is not a valid config option. If you previously had this config option set, it may have been removed.
+2026-07-26 14:01:24.248 Error parsing config toml. This is most likely due to a syntax error in the config.toml file. Please fix it and try again.
+Traceback (most recent call last):
+  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\streamlit\config.py", line 2606, in _update_config_with_toml
+    parsed_config_file = toml.loads(raw_toml)
+  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\toml\decoder.py", line 260, in loads
+    raise TomlDecodeError("Found invalid character in key name: '" +
+                          item + "'. Try quoting the key name.",
+                          original, i)
+toml.decoder.TomlDecodeError: Found invalid character in key name: '['. Try quoting the key name. (line 1 column 2 char 1)
+2026-07-26 14:02:07.104 "server.pythonVersion" is not a valid config option. If you previously had this config option set, it may have been removed.
+2026-07-26 14:02:07.105 Error parsing config toml. This is most likely due to a syntax error in the config.toml file. Please fix it and try again.
+Traceback (most recent call last):
+  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\streamlit\config.py", line 2606, in _update_config_with_toml
+    parsed_config_file = toml.loads(raw_toml)
+  File "C:\Users\Imman\Kiwi_Bot_model\venv\Lib\site-packages\toml\decoder.py", line 260, in loads
+    raise TomlDecodeError("Found invalid character in key name: '" +
+                          item + "'. Try quoting the key name.",
+                          original, i)
+toml.decoder.TomlDecodeError: Found invalid character in key name: '['. Try quoting the key name. (line 1 column 2 char 1)
+2026-07-26 14:03:04.317 "server.pythonVersion" is not a valid config option. If you previously had this config option set, it may have been removed.
+2026-07-26 14:03:04.547 "server.pythonVersion" is not a valid config option. If you previously had this config option set, it may have been removed.

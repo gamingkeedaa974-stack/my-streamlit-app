@@ -542,6 +542,22 @@ async def fyers_auth_url(request: Request):
         return {"auth_url": url}
     return JSONResponse(status_code=400, content={"error": session._fyers_broker.last_error})
 
+
+@app.get("/api/fyers/auth-url")
+async def fyers_auth_url_get(request: Request):
+    session = await session_manager.get_session(require_user_id(request))
+    if not hasattr(session, '_fyers_broker') or session._fyers_broker is None:
+        from backend.fyers_broker import FyersBroker
+        session._fyers_broker = FyersBroker(
+            app_id=os.environ.get("FYERS_API_KEY"),
+            secret_key=os.environ.get("FYERS_SECRET"),
+            redirect_uri=os.environ.get("FYERS_REDIRECT_URI", "http://localhost:8501"),
+        )
+    url = session._fyers_broker.generate_auth_url()
+    if url:
+        return {"auth_url": url}
+    return JSONResponse(status_code=400, content={"error": session._fyers_broker.last_error})
+
 @app.post("/api/fyers/auth-token")
 async def fyers_auth_token(request: Request):
     body = await request.json()
@@ -597,6 +613,78 @@ async def fyers_test(request: Request):
     if profile:
         return {"status": "connected", "profile": profile.get("data", {})}
     return JSONResponse(status_code=400, content={"error": "Connected but profile fetch failed"})
+
+
+@app.get("/api/fyers/profile")
+async def fyers_profile(request: Request):
+    session = await session_manager.get_session(require_user_id(request))
+    if not hasattr(session, '_fyers_broker') or session._fyers_broker is None:
+        from backend.fyers_broker import FyersBroker
+        session._fyers_broker = FyersBroker(
+            app_id=os.environ.get("FYERS_API_KEY"),
+            secret_key=os.environ.get("FYERS_SECRET"),
+            redirect_uri=os.environ.get("FYERS_REDIRECT_URI", "http://localhost:8501"),
+        )
+    broker = session._fyers_broker
+    try:
+        data = broker.get_profile()
+        return {"status": "ok", "data": data.get("data", {}) if isinstance(data, dict) else data}
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"error": "Profile fetch failed"})
+
+
+@app.get("/api/fyers/funds")
+async def fyers_funds(request: Request):
+    session = await session_manager.get_session(require_user_id(request))
+    if not hasattr(session, '_fyers_broker') or session._fyers_broker is None:
+        from backend.fyers_broker import FyersBroker
+        session._fyers_broker = FyersBroker(
+            app_id=os.environ.get("FYERS_API_KEY"),
+            secret_key=os.environ.get("FYERS_SECRET"),
+            redirect_uri=os.environ.get("FYERS_REDIRECT_URI", "http://localhost:8501"),
+        )
+    broker = session._fyers_broker
+    try:
+        data = broker.get_funds()
+        return {"status": "ok", "data": data.get("data", {}) if isinstance(data, dict) else data}
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "Funds fetch failed"})
+
+
+@app.get("/api/fyers/positions")
+async def fyers_positions(request: Request):
+    session = await session_manager.get_session(require_user_id(request))
+    if not hasattr(session, '_fyers_broker') or session._fyers_broker is None:
+        from backend.fyers_broker import FyersBroker
+        session._fyers_broker = FyersBroker(
+            app_id=os.environ.get("FYERS_API_KEY"),
+            secret_key=os.environ.get("FYERS_SECRET"),
+            redirect_uri=os.environ.get("FYERS_REDIRECT_URI", "http://localhost:8501"),
+        )
+    broker = session._fyers_broker
+    try:
+        data = broker.get_fyers_positions()
+        return {"status": "ok", "data": data.get("data", {}) if isinstance(data, dict) else data}
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "Positions fetch failed"})
+
+
+@app.get("/api/fyers/orders")
+async def fyers_orders(request: Request):
+    session = await session_manager.get_session(require_user_id(request))
+    if not hasattr(session, '_fyers_broker') or session._fyers_broker is None:
+        from backend.fyers_broker import FyersBroker
+        session._fyers_broker = FyersBroker(
+            app_id=os.environ.get("FYERS_API_KEY"),
+            secret_key=os.environ.get("FYERS_SECRET"),
+            redirect_uri=os.environ.get("FYERS_REDIRECT_URI", "http://localhost:8501"),
+        )
+    broker = session._fyers_broker
+    try:
+        data = broker.get_orders()
+        return {"status": "ok", "data": data.get("data", {}) if isinstance(data, dict) else data}
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "Orders fetch failed"})
 # ---------- WebSocket ----------
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
